@@ -1,0 +1,109 @@
+.astra-builder__inline,
+.astra-builder__palette,
+.astra-builder__canvas {
+    box-sizing: border-box;
+}
+
+.astra-builder__inline {
+    display: flex;
+    gap: 24px;
+    width: 100%;
+    padding: 16px;
+}
+
+.astra-builder__palette {
+    flex: 0 0 280px;
+    background: #f8fafc;
+    border: 1px solid #dbe4ef;
+    border-radius: 6px;
+    padding: 16px;
+}
+
+.astra-builder__palette h2,
+.astra-builder__canvas h2 {
+    margin-top: 0;
+    font-size: 16px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #1f2937;
+}
+
+.astra-builder__palette p,
+.astra-builder__canvas p {
+    margin-top: 0;
+    color: #4b5563;
+    font-size: 13px;
+}
+
+.astra-builder__palette-item {
+    cursor: grab;
+    margin-bottom: 12px;
+    box-shadow: none;
+    border: 1px solid transparent;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.astra-builder__palette-item:hover {
+    border-color: #94a3b8;
+    box-shadow: 0 4px 10px rgba(15, 23, 42, 0.08);
+}
+
+.astra-builder__canvas {
+    flex: 1 1 auto;
+    background: #ffffff;
+    border: 1px dashed #cbd5f5;
+    border-radius: 6px;
+    padding: 16px;
+    min-height: 240px;
+}
+
+.astra-builder__drop-zone {
+    border: 2px dashed transparent;
+    border-radius: 4px;
+    padding: 12px;
+    margin: 8px 0;
+    text-align: center;
+    color: #64748b;
+    font-size: 12px;
+    transition: all 0.15s ease;
+}
+
+.astra-builder__drop-zone.is-active {
+    border-color: #6366f1;
+    background: rgba(99, 102, 241, 0.08);
+    color: #3730a3;
+}
+
+.astra-builder__canvas-block {
+    cursor: grab;
+    margin: 8px 0;
+    border: 1px solid #e2e8f0;
+    box-shadow: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.astra-builder__canvas-block:hover {
+    border-color: #6366f1;
+    box-shadow: 0 6px 12px rgba(99, 102, 241, 0.12);
+}
+
+.astra-builder__canvas-block code {
+    font-size: 11px;
+    color: #64748b;
+}
+
+.components-panel__body .astra-builder__palette,
+.components-panel__body .astra-builder__canvas {
+    border: none;
+    padding: 0;
+}
+
+@media ( max-width: 960px ) {
+    .astra-builder__inline {
+        flex-direction: column;
+    }
+
+    .astra-builder__palette {
+        flex-basis: auto;
+    }
+}
