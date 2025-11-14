@@ -97,11 +97,31 @@
             return 'layout';
         }
 
-        if ( typeof blockIcon === 'object' && blockIcon.src ) {
-            return blockIcon.src;
+        // String icons (Dashicon slugs) can be used directly
+        if ( typeof blockIcon === 'string' ) {
+            return blockIcon;
         }
 
-        return blockIcon;
+        // Functions/components can be used directly
+        if ( typeof blockIcon === 'function' ) {
+            return blockIcon;
+        }
+
+        // Handle object-based icons
+        if ( typeof blockIcon === 'object' ) {
+            // If it's a React element (has $$typeof), return it directly
+            if ( blockIcon.$$typeof ) {
+                return blockIcon;
+            }
+
+            // If it has a src property, recursively normalize that
+            if ( blockIcon.src ) {
+                return normalizeBlockIcon( blockIcon.src );
+            }
+        }
+
+        // Fallback to default icon for any unhandled cases
+        return 'layout';
     };
 
     const PaletteItem = ( { blueprint } ) => {
