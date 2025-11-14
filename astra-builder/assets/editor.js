@@ -97,30 +97,44 @@
             return 'layout';
         }
 
-        // String icons (Dashicon slugs) can be used directly
+        // String icons (Dashicon slugs) are the safest - return directly
         if ( typeof blockIcon === 'string' ) {
             return blockIcon;
         }
 
-        // Functions/components can be used directly
-        if ( typeof blockIcon === 'function' ) {
-            return blockIcon;
-        }
-
-        // Handle object-based icons
+        // For object-based icons, we need to be very defensive to avoid React error #31
         if ( typeof blockIcon === 'object' ) {
-            // If it's a React element (has $$typeof), return it directly
-            if ( blockIcon.$$typeof ) {
-                return blockIcon;
+            // Try to extract a usable string from nested src properties
+            let current = blockIcon;
+            let depth = 0;
+            const maxDepth = 5; // Prevent infinite loops
+
+            while ( current && typeof current === 'object' && depth < maxDepth ) {
+                // If we find a string src, return it
+                if ( typeof current.src === 'string' ) {
+                    return current.src;
+                }
+                // If src exists but isn't a string, keep drilling down
+                if ( current.src ) {
+                    current = current.src;
+                } else {
+                    // No more src to drill into
+                    break;
+                }
+                depth++;
             }
 
-            // If it has a src property, recursively normalize that
-            if ( blockIcon.src ) {
-                return normalizeBlockIcon( blockIcon.src );
+            // If we extracted a string from deep nesting, return it
+            if ( typeof current === 'string' ) {
+                return current;
             }
+
+            // For any object we can't safely extract a string from, use fallback
+            // This prevents passing plain objects to React which causes error #31
+            return 'layout';
         }
 
-        // Fallback to default icon for any unhandled cases
+        // Don't pass functions or other types - use fallback to be safe
         return 'layout';
     };
 
