@@ -3,7 +3,7 @@
     const { __ } = wp.i18n;
     const { Fragment, useCallback, useMemo, useState } = wp.element;
     const { PanelBody, Card, CardBody, CardHeader, Icon } = wp.components;
-    const { PluginSidebarMoreMenuItem, PluginSidebar } = wp.editPost || {};
+    const { PluginSidebarMoreMenuItem, PluginSidebar } = wp.editor || wp.editPost || {};
     const { createBlock, getBlockType } = wp.blocks;
     const { useDispatch, useSelect } = wp.data;
     const { useViewportMatch } = wp.compose;
@@ -92,9 +92,21 @@
         return createBlock( blueprint.name, blueprint.attributes || {}, innerBlocks );
     };
 
+    const normalizeBlockIcon = ( blockIcon ) => {
+        if ( ! blockIcon ) {
+            return 'layout';
+        }
+
+        if ( typeof blockIcon === 'object' && blockIcon.src ) {
+            return blockIcon.src;
+        }
+
+        return blockIcon;
+    };
+
     const PaletteItem = ( { blueprint } ) => {
         const blockType = getBlockType( blueprint.name );
-        const icon = blockType && blockType.icon ? blockType.icon : 'layout';
+        const icon = blockType && blockType.icon ? normalizeBlockIcon( blockType.icon ) : 'layout';
 
         const onDragStart = useCallback( ( event ) => {
             event.dataTransfer.setData( 'text/plain', blueprint.name );
@@ -125,7 +137,7 @@
 
     const ExistingBlockCard = ( { block, index, onStartDrag, onFocus } ) => {
         const blockType = getBlockType( block.name );
-        const icon = blockType && blockType.icon ? blockType.icon : 'layout';
+        const icon = blockType && blockType.icon ? normalizeBlockIcon( blockType.icon ) : 'layout';
         const title = ( blockType && blockType.title ) || block.name;
 
         return wp.element.createElement(
