@@ -3,7 +3,7 @@
     const { __ } = wp.i18n;
     const { Fragment, useCallback, useMemo, useState } = wp.element;
     const { PanelBody, Card, CardBody, CardHeader, Icon } = wp.components;
-    const { PluginSidebarMoreMenuItem, PluginSidebar } = wp.editor || wp.editPost || {};
+    const { PluginSidebarMoreMenuItem, PluginSidebar } = wp.editPost || {};
     const { createBlock, getBlockType } = wp.blocks;
     const { useDispatch, useSelect } = wp.data;
     const { useViewportMatch } = wp.compose;
@@ -30,6 +30,10 @@
             name: 'core/image',
             title: __( 'Image', 'astra-builder' ),
             description: __( 'Drop in a media highlight or product shot.', 'astra-builder' ),
+            attributes: {
+                url: '',
+                alt: '',
+            },
         },
         {
             name: 'core/columns',
