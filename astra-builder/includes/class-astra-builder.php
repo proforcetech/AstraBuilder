@@ -14,6 +14,13 @@ class Astra_Builder {
     protected static $instance = null;
 
     /**
+     * Registered service instances.
+     *
+     * @var array
+     */
+    protected $services = array();
+
+    /**
      * Retrieve the singleton instance.
      *
      * @return Astra_Builder
@@ -30,7 +37,38 @@ class Astra_Builder {
      * Bootstraps plugin functionality.
      */
     public function init() {
+        require_once __DIR__ . '/services/class-astra-builder-template-service.php';
+        require_once __DIR__ . '/services/class-astra-builder-token-service.php';
+        require_once __DIR__ . '/rest/class-astra-builder-rest-controller.php';
+        require_once __DIR__ . '/rest/class-astra-builder-templates-controller.php';
+        require_once __DIR__ . '/rest/class-astra-builder-tokens-controller.php';
+        require_once __DIR__ . '/rest/class-astra-builder-snapshots-controller.php';
+        require_once __DIR__ . '/rest/class-astra-builder-settings-controller.php';
+
+        $this->services['templates'] = new Astra_Builder_Template_Service();
+        $this->services['templates']->register();
+
+        $this->services['tokens'] = new Astra_Builder_Token_Service();
+        $this->services['tokens']->register();
+
         add_action( 'enqueue_block_editor_assets', array( $this, 'enqueue_block_editor_assets' ) );
+        add_action( 'rest_api_init', array( $this, 'register_rest_routes' ) );
+    }
+
+    /**
+     * Register REST controllers.
+     */
+    public function register_rest_routes() {
+        $controllers = array(
+            new Astra_Builder_REST_Templates_Controller( $this->services['templates'] ),
+            new Astra_Builder_REST_Tokens_Controller( $this->services['tokens'] ),
+            new Astra_Builder_REST_Snapshots_Controller( $this->services['tokens'] ),
+            new Astra_Builder_REST_Settings_Controller( $this->services['tokens'] ),
+        );
+
+        foreach ( $controllers as $controller ) {
+            $controller->register_routes();
+        }
     }
 
     /**
