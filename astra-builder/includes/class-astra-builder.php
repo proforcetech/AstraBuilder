@@ -93,9 +93,17 @@ class Astra_Builder {
         );
 
         wp_register_script(
+            'astra-builder-canvas-renderer',
+            $asset_base . 'assets/editor/canvas-renderer.js',
+            array( 'wp-element', 'wp-data' ),
+            filemtime( $asset_path . 'assets/editor/canvas-renderer.js' ),
+            true
+        );
+
+        wp_register_script(
             'astra-builder-editor',
             $asset_base . 'assets/editor.js',
-            $dependencies,
+            array_merge( $dependencies, array( 'astra-builder-canvas-renderer' ) ),
             filemtime( $asset_path . 'assets/editor.js' ),
             true
         );
@@ -107,6 +115,7 @@ class Astra_Builder {
             filemtime( $asset_path . 'assets/editor.css' )
         );
 
+        wp_enqueue_script( 'astra-builder-canvas-renderer' );
         wp_enqueue_script( 'astra-builder-editor' );
         wp_enqueue_style( 'astra-builder-editor' );
     }
