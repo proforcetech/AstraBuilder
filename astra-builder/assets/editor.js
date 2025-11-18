@@ -1,8 +1,8 @@
 ( function( wp ) {
     const { registerPlugin } = wp.plugins;
-    const { __ } = wp.i18n;
+    const { __, sprintf } = wp.i18n;
     const { Fragment, useCallback, useMemo, useState } = wp.element;
-    const { PanelBody, Card, CardBody, CardHeader, Icon, Button } = wp.components;
+    const { PanelBody, Card, CardBody, CardHeader, Icon, Button, ButtonGroup, TextControl, Notice } = wp.components;
     const { PluginSidebarMoreMenuItem, PluginSidebar } = wp.editPost || {};
     const { createBlock, getBlockType } = wp.blocks;
     const { useDispatch, useSelect } = wp.data;
@@ -17,6 +17,25 @@
         computeSpacingIndicators = () => [],
         useKeyboardControls = () => {},
     } = canvasUtils;
+
+    const responsiveUtils = window.AstraBuilderResponsive || {};
+    const {
+        ResponsiveProvider = ( { children } ) => children,
+        useResponsiveContext = () => ( {
+            breakpoints: [],
+            activeBreakpoint: 'global',
+            setActiveBreakpoint: () => {},
+            getParentId: () => null,
+        } ),
+        useResponsiveAttribute = () => ( {
+            value: undefined,
+            setValue: () => {},
+            resetValue: () => {},
+            isInherited: false,
+            hasOverride: false,
+            sourceBreakpoint: 'global',
+        } ),
+    } = responsiveUtils;
 
     const PALETTE_BLOCKS = [
         {
@@ -93,6 +112,81 @@
         NEW_BLOCK: 'astra-builder/new-block',
         EXISTING_BLOCK: 'astra-builder/existing-block',
     };
+
+    const { addFilter } = wp.hooks || {};
+
+    const ensureResponsiveAttribute = ( settings = {} ) => {
+        const nextSettings = Object.assign( {}, settings );
+        nextSettings.attributes = nextSettings.attributes || {};
+        if ( ! nextSettings.attributes.astraBuilderResponsive ) {
+            nextSettings.attributes.astraBuilderResponsive = {
+                type: 'object',
+                default: {},
+            };
+        }
+        return nextSettings;
+    };
+
+    if ( addFilter ) {
+        addFilter( 'blocks.registerBlockType', 'astra-builder/responsive-attributes', ensureResponsiveAttribute );
+    }
+
+    const RESPONSIVE_SECTIONS = [
+        {
+            id: 'layout',
+            title: __( 'Layout', 'astra-builder' ),
+            description: __( 'Control spacing and structure.', 'astra-builder' ),
+            controls: [
+                { id: 'content-size', label: __( 'Content width', 'astra-builder' ), path: [ 'style', 'layout', 'contentSize' ], placeholder: '1200px' },
+                { id: 'justify', label: __( 'Justify content', 'astra-builder' ), path: [ 'style', 'layout', 'justifyContent' ], placeholder: 'flex-start' },
+            ],
+        },
+        {
+            id: 'design',
+            title: __( 'Design', 'astra-builder' ),
+            description: __( 'Tweak visual styles per breakpoint.', 'astra-builder' ),
+            controls: [
+                { id: 'text-color', label: __( 'Text color', 'astra-builder' ), path: [ 'style', 'color', 'text' ], placeholder: '#1f2937' },
+                { id: 'background-color', label: __( 'Background', 'astra-builder' ), path: [ 'style', 'color', 'background' ], placeholder: '#ffffff' },
+            ],
+        },
+        {
+            id: 'effects',
+            title: __( 'Effects', 'astra-builder' ),
+            description: __( 'Apply depth, motion, and polish.', 'astra-builder' ),
+            controls: [
+                { id: 'radius', label: __( 'Border radius', 'astra-builder' ), path: [ 'style', 'border', 'radius' ], placeholder: '8px' },
+                { id: 'shadow', label: __( 'Shadow color', 'astra-builder' ), path: [ 'style', 'shadow', 'color' ], placeholder: 'rgba(15,23,42,0.18)' },
+            ],
+        },
+        {
+            id: 'interactions',
+            title: __( 'Interactions', 'astra-builder' ),
+            description: __( 'Describe how the block responds to input.', 'astra-builder' ),
+            controls: [
+                { id: 'transition', label: __( 'Transition duration', 'astra-builder' ), path: [ 'style', 'transition', 'duration' ], placeholder: '200ms' },
+                { id: 'animation', label: __( 'Animation', 'astra-builder' ), path: [ 'style', 'animation', 'name' ], placeholder: 'fade-in' },
+            ],
+        },
+        {
+            id: 'data',
+            title: __( 'Data', 'astra-builder' ),
+            description: __( 'Link to APIs or datasets.', 'astra-builder' ),
+            controls: [
+                { id: 'endpoint', label: __( 'Endpoint', 'astra-builder' ), path: [ 'metadata', 'astraBuilder', 'endpoint' ], placeholder: 'https://api.example.com' },
+                { id: 'binding', label: __( 'Binding key', 'astra-builder' ), path: [ 'metadata', 'astraBuilder', 'binding' ], placeholder: 'hero.title' },
+            ],
+        },
+        {
+            id: 'visibility',
+            title: __( 'Visibility', 'astra-builder' ),
+            description: __( 'Show or hide content responsively.', 'astra-builder' ),
+            controls: [
+                { id: 'display', label: __( 'Display', 'astra-builder' ), path: [ 'style', 'display' ], placeholder: 'flex' },
+                { id: 'opacity', label: __( 'Opacity', 'astra-builder' ), path: [ 'style', 'opacity' ], placeholder: '1' },
+            ],
+        },
+    ];
 
     const createBlockFromBlueprint = ( blueprint ) => {
         if ( ! blueprint ) {
@@ -248,6 +342,79 @@
                 style: { top: `${ indicator.top }px` },
             }, indicator.label )
         ) );
+
+    const BreakpointToolbar = () => {
+        const { activeBreakpoint, breakpoints, setActiveBreakpoint } = useResponsiveContext();
+        return wp.element.createElement( ButtonGroup, { className: 'astra-builder__breakpoint-toolbar', 'aria-label': __( 'Select breakpoint', 'astra-builder' ) },
+            breakpoints.map( ( breakpoint ) =>
+                wp.element.createElement( Button, {
+                    key: breakpoint.id,
+                    isPrimary: activeBreakpoint === breakpoint.id,
+                    isSecondary: activeBreakpoint !== breakpoint.id,
+                    onClick: () => setActiveBreakpoint( breakpoint.id ),
+                }, breakpoint.label )
+            )
+        );
+    };
+
+    const ResponsiveControl = ( { clientId, control } ) => {
+        const { activeBreakpoint, breakpoints } = useResponsiveContext();
+        const { value, setValue, resetValue, isInherited, hasOverride, sourceBreakpoint } = useResponsiveAttribute( clientId, control.path );
+        const resolvedValue = value === undefined || value === null ? '' : value;
+        const source = breakpoints.find( ( bp ) => bp.id === sourceBreakpoint );
+        const helpText = isInherited && source ? sprintf( __( 'Inherited from %s', 'astra-builder' ), source.label ) : control.help;
+
+        return wp.element.createElement( 'div', { className: 'astra-builder__responsive-control' + ( hasOverride ? ' has-override' : '' ) },
+            wp.element.createElement( TextControl, {
+                label: control.label,
+                value: resolvedValue,
+                placeholder: control.placeholder,
+                onChange: ( nextValue ) => setValue( nextValue || undefined ),
+                help: helpText,
+            } ),
+            activeBreakpoint !== 'global' && hasOverride ?
+                wp.element.createElement( Button, { isSmall: true, isSecondary: true, onClick: resetValue }, __( 'Reset to global', 'astra-builder' ) ) :
+                null
+        );
+    };
+
+    const ResponsiveSection = ( { section, clientId } ) =>
+        wp.element.createElement( PanelBody, {
+            title: section.title,
+            initialOpen: section.initialOpen !== false,
+            className: 'astra-builder__responsive-section',
+        },
+        section.description ? wp.element.createElement( 'p', { className: 'astra-builder__responsive-description' }, section.description ) : null,
+        section.controls.map( ( control ) =>
+            wp.element.createElement( ResponsiveControl, {
+                key: `${ section.id }-${ control.id }`,
+                clientId,
+                control,
+            } )
+        ) );
+
+    const ResponsiveInspector = () => {
+        const selectedBlock = useSelect( ( select ) => {
+            const blockEditor = select( 'core/block-editor' );
+            const selectedId = blockEditor.getSelectedBlockClientId ? blockEditor.getSelectedBlockClientId() : null;
+            return selectedId ? blockEditor.getBlock( selectedId ) : null;
+        }, [] );
+
+        const blockType = selectedBlock ? getBlockType( selectedBlock.name ) : null;
+        const blockLabel = selectedBlock ? ( ( blockType && blockType.title ) || selectedBlock.name ) : null;
+
+        return wp.element.createElement( 'div', { className: 'astra-builder__inspector' },
+            wp.element.createElement( PanelBody, { title: __( 'Responsive controls', 'astra-builder' ), initialOpen: true },
+                selectedBlock ? wp.element.createElement( Fragment, null,
+                    wp.element.createElement( 'p', { className: 'astra-builder__inspector-target' }, sprintf( __( 'Editing %s', 'astra-builder' ), blockLabel ) ),
+                    wp.element.createElement( BreakpointToolbar, null )
+                ) : wp.element.createElement( Notice, { status: 'info', isDismissible: false }, __( 'Select a block to edit responsive settings.', 'astra-builder' ) )
+            ),
+            selectedBlock ? RESPONSIVE_SECTIONS.map( ( section ) =>
+                wp.element.createElement( ResponsiveSection, { section, clientId: selectedBlock.clientId, key: section.id } )
+            ) : null
+        );
+    };
 
     const CanvasRenderer = () => {
         const blocks = useSelect( ( select ) => select( 'core/block-editor' ).getBlocks(), [] );
@@ -447,16 +614,19 @@
                 wp.element.createElement( 'h2', null, __( 'Canvas layout', 'astra-builder' ) ),
                 wp.element.createElement( 'p', null, __( 'Use drag handles, snap lines, and keyboard shortcuts to rearrange content.', 'astra-builder' ) ),
                 wp.element.createElement( CanvasRenderer, null )
-            )
+            ),
+            wp.element.createElement( ResponsiveInspector, null )
         );
     };
 
     const BuilderPlugin = () =>
-        wp.element.createElement( Fragment, null,
-            PluginSidebarMoreMenuItem ? wp.element.createElement( PluginSidebarMoreMenuItem, { target: 'astra-builder-sidebar' }, __( 'Astra Builder', 'astra-builder' ) ) : null,
-            PluginSidebar ? wp.element.createElement( PluginSidebar, { name: 'astra-builder-sidebar', title: __( 'Astra Builder', 'astra-builder' ) },
-                wp.element.createElement( BuilderSidebar, null )
-            ) : wp.element.createElement( 'div', { className: 'astra-builder__inline' }, wp.element.createElement( BuilderSidebar, null ) )
+        wp.element.createElement( ResponsiveProvider, null,
+            wp.element.createElement( Fragment, null,
+                PluginSidebarMoreMenuItem ? wp.element.createElement( PluginSidebarMoreMenuItem, { target: 'astra-builder-sidebar' }, __( 'Astra Builder', 'astra-builder' ) ) : null,
+                PluginSidebar ? wp.element.createElement( PluginSidebar, { name: 'astra-builder-sidebar', title: __( 'Astra Builder', 'astra-builder' ) },
+                    wp.element.createElement( BuilderSidebar, null )
+                ) : wp.element.createElement( 'div', { className: 'astra-builder__inline' }, wp.element.createElement( BuilderSidebar, null ) )
+            )
         );
 
     registerPlugin( 'astra-builder', {

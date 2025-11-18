@@ -101,9 +101,20 @@ class Astra_Builder {
         );
 
         wp_register_script(
+            'astra-builder-responsive-context',
+            $asset_base . 'assets/editor/responsive-context.js',
+            array( 'wp-element', 'wp-data', 'wp-i18n' ),
+            filemtime( $asset_path . 'assets/editor/responsive-context.js' ),
+            true
+        );
+
+        wp_register_script(
             'astra-builder-editor',
             $asset_base . 'assets/editor.js',
-            array_merge( $dependencies, array( 'astra-builder-canvas-renderer' ) ),
+            array_merge(
+                $dependencies,
+                array( 'astra-builder-canvas-renderer', 'astra-builder-responsive-context' )
+            ),
             filemtime( $asset_path . 'assets/editor.js' ),
             true
         );
@@ -116,6 +127,7 @@ class Astra_Builder {
         );
 
         wp_enqueue_script( 'astra-builder-canvas-renderer' );
+        wp_enqueue_script( 'astra-builder-responsive-context' );
         wp_enqueue_script( 'astra-builder-editor' );
         wp_enqueue_style( 'astra-builder-editor' );
     }
