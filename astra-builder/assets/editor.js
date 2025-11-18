@@ -17,6 +17,7 @@
         TextareaControl,
         ToggleControl,
         RangeControl,
+        Spinner,
     } = wp.components;
     const { PluginSidebarMoreMenuItem, PluginSidebar } = wp.editPost || {};
     const blockEditor = wp.blockEditor || wp.editor || {};
@@ -37,10 +38,176 @@
     const conditionOptions = pluginData.conditions || {};
     const bindingConfig = pluginData.binding || {};
     const formConfig = pluginData.forms || {};
+    const initialTokenState = pluginData.tokens && pluginData.tokens.initial ? pluginData.tokens.initial : null;
 
     const defaultSpamSettings = formConfig.spam || {};
 
     const sanitizeConditionList = ( list ) => Array.from( new Set( ( Array.isArray( list ) ? list : [] ).filter( Boolean ) ) );
+
+    const cloneDeep = ( value ) => {
+        if ( Array.isArray( value ) ) {
+            return value.map( ( item ) => cloneDeep( item ) );
+        }
+        if ( value && typeof value === 'object' ) {
+            return Object.keys( value ).reduce( ( acc, key ) => {
+                acc[ key ] = cloneDeep( value[ key ] );
+                return acc;
+            }, {} );
+        }
+        return value;
+    };
+
+    const ensurePathArray = ( path ) => ( Array.isArray( path ) ? path : String( path ).split( '.' ) );
+
+    const getPathValue = ( source, path ) => {
+        const parts = ensurePathArray( path );
+        return parts.reduce( ( acc, key ) => {
+            if ( null === acc || undefined === acc ) {
+                return undefined;
+            }
+            return acc[ key ];
+        }, source );
+    };
+
+    const setPathValue = ( source, path, value ) => {
+        const parts = ensurePathArray( path );
+        if ( ! parts.length ) {
+            return source;
+        }
+
+        const next = cloneDeep( source || {} );
+        let cursor = next;
+
+        parts.forEach( ( key, index ) => {
+            const isLast = index === parts.length - 1;
+            if ( isLast ) {
+                cursor[ key ] = value;
+                return;
+            }
+            if ( ! cursor[ key ] || typeof cursor[ key ] !== 'object' ) {
+                cursor[ key ] = {};
+            }
+            cursor = cursor[ key ];
+        } );
+
+        return next;
+    };
+
+    const unsetPathValue = ( source, path ) => {
+        const parts = ensurePathArray( path );
+        if ( ! parts.length ) {
+            return source;
+        }
+
+        const next = cloneDeep( source || {} );
+        let cursor = next;
+        const stack = [];
+
+        for ( let i = 0; i < parts.length - 1; i += 1 ) {
+            const key = parts[ i ];
+            if ( ! cursor[ key ] || typeof cursor[ key ] !== 'object' ) {
+                return next;
+            }
+            stack.push( { parent: cursor, key } );
+            cursor = cursor[ key ];
+        }
+
+        const lastKey = parts[ parts.length - 1 ];
+        if ( cursor && Object.prototype.hasOwnProperty.call( cursor, lastKey ) ) {
+            delete cursor[ lastKey ];
+        }
+
+        for ( let i = stack.length - 1; i >= 0; i -= 1 ) {
+            const frame = stack[ i ];
+            if ( frame.parent[ frame.key ] && ! Object.keys( frame.parent[ frame.key ] ).length ) {
+                delete frame.parent[ frame.key ];
+            }
+        }
+
+        return next;
+    };
+
+    const TEXT_TRANSFORM_OPTIONS = [
+        { label: __( 'Inherit', 'astra-builder' ), value: '' },
+        { label: __( 'Uppercase', 'astra-builder' ), value: 'uppercase' },
+        { label: __( 'Lowercase', 'astra-builder' ), value: 'lowercase' },
+        { label: __( 'Capitalize', 'astra-builder' ), value: 'capitalize' },
+    ];
+
+    const LIST_MARKER_OPTIONS = [
+        { label: __( 'Disc', 'astra-builder' ), value: 'disc' },
+        { label: __( 'Circle', 'astra-builder' ), value: 'circle' },
+        { label: __( 'Square', 'astra-builder' ), value: 'square' },
+        { label: __( 'Decimal', 'astra-builder' ), value: 'decimal' },
+    ];
+
+    const DESIGN_SECTIONS = [
+        {
+            id: 'typography',
+            title: __( 'Typography', 'astra-builder' ),
+            description: __( 'Control the primary body and heading styles that power the site.', 'astra-builder' ),
+            fields: [
+                { path: 'typography.body.fontFamily', label: __( 'Body font family', 'astra-builder' ), placeholder: 'Inter, sans-serif' },
+                { path: 'typography.body.fontWeight', label: __( 'Body font weight', 'astra-builder' ), placeholder: '400' },
+                { path: 'typography.body.lineHeight', label: __( 'Body line height', 'astra-builder' ), placeholder: '1.6' },
+                { path: 'typography.body.textTransform', label: __( 'Body text transform', 'astra-builder' ), control: 'select', options: TEXT_TRANSFORM_OPTIONS },
+                { path: 'typography.heading.fontFamily', label: __( 'Heading font family', 'astra-builder' ), placeholder: 'Outfit, sans-serif' },
+                { path: 'typography.heading.fontWeight', label: __( 'Heading font weight', 'astra-builder' ), placeholder: '600' },
+                { path: 'typography.heading.lineHeight', label: __( 'Heading line height', 'astra-builder' ), placeholder: '1.3' },
+                { path: 'typography.heading.textTransform', label: __( 'Heading text transform', 'astra-builder' ), control: 'select', options: TEXT_TRANSFORM_OPTIONS },
+            ],
+        },
+        {
+            id: 'buttons',
+            title: __( 'Buttons', 'astra-builder' ),
+            description: __( 'Define the shared look and feel for every button template.', 'astra-builder' ),
+            fields: [
+                { path: 'components.buttons.fontWeight', label: __( 'Font weight', 'astra-builder' ), placeholder: '600' },
+                { path: 'components.buttons.textTransform', label: __( 'Text transform', 'astra-builder' ), control: 'select', options: TEXT_TRANSFORM_OPTIONS },
+                { path: 'components.buttons.borderRadius', label: __( 'Border radius', 'astra-builder' ), placeholder: '999px' },
+                { path: 'components.buttons.paddingY', label: __( 'Vertical padding', 'astra-builder' ), placeholder: '0.85rem' },
+                { path: 'components.buttons.paddingX', label: __( 'Horizontal padding', 'astra-builder' ), placeholder: '1.5rem' },
+            ],
+        },
+        {
+            id: 'lists',
+            title: __( 'Lists', 'astra-builder' ),
+            description: __( 'Adjust list spacing and markers for articles and sections.', 'astra-builder' ),
+            fields: [
+                { path: 'components.lists.gap', label: __( 'Row gap', 'astra-builder' ), placeholder: '0.75rem' },
+                { path: 'components.lists.markerColor', label: __( 'Marker color', 'astra-builder' ), placeholder: '#3a4f66' },
+                { path: 'components.lists.markerStyle', label: __( 'Marker style', 'astra-builder' ), control: 'select', options: LIST_MARKER_OPTIONS },
+            ],
+        },
+        {
+            id: 'forms',
+            title: __( 'Forms', 'astra-builder' ),
+            description: __( 'Set consistent spacing and states for inputs, textareas, and select fields.', 'astra-builder' ),
+            fields: [
+                { path: 'components.forms.fieldPaddingY', label: __( 'Field padding (Y)', 'astra-builder' ), placeholder: '0.75rem' },
+                { path: 'components.forms.fieldPaddingX', label: __( 'Field padding (X)', 'astra-builder' ), placeholder: '1rem' },
+                { path: 'components.forms.borderRadius', label: __( 'Border radius', 'astra-builder' ), placeholder: '8px' },
+                { path: 'components.forms.borderColor', label: __( 'Border color', 'astra-builder' ), placeholder: 'rgba(15,23,42,0.12)' },
+                { path: 'components.forms.focusColor', label: __( 'Focus color', 'astra-builder' ), placeholder: '#2563eb' },
+                { path: 'components.forms.background', label: __( 'Field background', 'astra-builder' ), placeholder: '#ffffff' },
+            ],
+        },
+        {
+            id: 'modes',
+            title: __( 'Dark mode', 'astra-builder' ),
+            description: __( 'Control how typography and surfaces adapt for dark themes.', 'astra-builder' ),
+            fields: [
+                { path: 'modes.dark.enabled', label: __( 'Enable dark mode variables', 'astra-builder' ), control: 'toggle' },
+                { path: 'modes.dark.background', label: __( 'Background', 'astra-builder' ), placeholder: '#0f172a' },
+                { path: 'modes.dark.surface', label: __( 'Surface', 'astra-builder' ), placeholder: '#1f2937' },
+                { path: 'modes.dark.text', label: __( 'Text color', 'astra-builder' ), placeholder: '#e2e8f0' },
+                { path: 'modes.dark.muted', label: __( 'Muted color', 'astra-builder' ), placeholder: '#94a3b8' },
+                { path: 'modes.dark.accent', label: __( 'Accent color', 'astra-builder' ), placeholder: '#38bdf8' },
+                { path: 'modes.dark.buttons.background', label: __( 'Button background', 'astra-builder' ), placeholder: '#2563eb' },
+                { path: 'modes.dark.buttons.color', label: __( 'Button text', 'astra-builder' ), placeholder: '#f8fafc' },
+            ],
+        },
+    ];
 
     const AstraBlockRegistry = ( () => {
         const presets = [];
@@ -833,6 +1000,7 @@
     });
 
     const CONDITIONS_META_KEY = metaKeys.conditions || '_astra_builder_conditions';
+    const STYLE_META_KEY = metaKeys.styles || '_astra_builder_style_overrides';
 
     const canvasUtils = window.AstraBuilderCanvas || {};
     const {
@@ -963,6 +1131,243 @@
         );
     };
 
+    const useDesignTokens = () => {
+        const [ tokens, setTokens ] = useState( initialTokenState );
+        const [ isLoading, setIsLoading ] = useState( ! initialTokenState );
+        const [ isSaving, setIsSaving ] = useState( false );
+        const [ error, setError ] = useState( null );
+        const [ hasChanges, setHasChanges ] = useState( false );
+
+        useEffect( () => {
+            if ( ! apiFetch ) {
+                setIsLoading( false );
+                setError( __( 'REST API unavailable.', 'astra-builder' ) );
+                return;
+            }
+
+            setIsLoading( true );
+
+            apiFetch( { path: '/' + restNamespace + '/tokens' } ).then( ( response ) => {
+                setTokens( response );
+                setHasChanges( false );
+                setIsLoading( false );
+                setError( null );
+            } ).catch( ( fetchError ) => {
+                setIsLoading( false );
+                setError( fetchError && fetchError.message ? fetchError.message : __( 'Unable to load tokens.', 'astra-builder' ) );
+            } );
+        }, [ restNamespace ] );
+
+        const updateToken = useCallback( ( path, value ) => {
+            setTokens( ( current ) => setPathValue( current || {}, path, value ) );
+            setHasChanges( true );
+        }, [] );
+
+        const saveTokens = useCallback( () => {
+            if ( ! apiFetch || ! tokens ) {
+                return;
+            }
+
+            setIsSaving( true );
+            setError( null );
+
+            apiFetch( {
+                path: '/' + restNamespace + '/tokens',
+                method: 'POST',
+                data: tokens,
+            } ).then( ( response ) => {
+                setTokens( response );
+                setHasChanges( false );
+                setIsSaving( false );
+            } ).catch( ( fetchError ) => {
+                setIsSaving( false );
+                setError( fetchError && fetchError.message ? fetchError.message : __( 'Unable to save tokens.', 'astra-builder' ) );
+            } );
+        }, [ tokens, restNamespace ] );
+
+        return { tokens, isLoading, error, updateToken, saveTokens, isSaving, hasChanges };
+    };
+
+    const TokenField = ( { field, value, onChange } ) => {
+        if ( 'toggle' === field.control ) {
+            return wp.element.createElement( ToggleControl, {
+                label: field.label,
+                checked: !! value,
+                help: field.help,
+                onChange: ( nextValue ) => onChange( !! nextValue ),
+            } );
+        }
+
+        if ( 'select' === field.control && Array.isArray( field.options ) ) {
+            return wp.element.createElement( SelectControl, {
+                label: field.label,
+                value: value === undefined || value === null ? '' : value,
+                options: field.options,
+                help: field.help,
+                onChange: ( nextValue ) => onChange( nextValue ),
+            } );
+        }
+
+        return wp.element.createElement( TextControl, {
+            label: field.label,
+            value: value === undefined || value === null ? '' : value,
+            placeholder: field.placeholder,
+            help: field.help,
+            onChange: ( nextValue ) => onChange( nextValue ),
+        } );
+    };
+
+    const useTemplateStyleOverrides = () => {
+        const { overrides, meta } = useSelect( ( select ) => {
+            const editor = select( 'core/editor' );
+            const postMeta = editor.getEditedPostAttribute ? ( editor.getEditedPostAttribute( 'meta' ) || {} ) : {};
+            const savedOverrides = postMeta[ STYLE_META_KEY ];
+            return {
+                overrides: savedOverrides && typeof savedOverrides === 'object' ? savedOverrides : {},
+                meta: postMeta,
+            };
+        }, [ STYLE_META_KEY ] );
+
+        const { editPost } = useDispatch( 'core/editor' );
+
+        const persist = useCallback( ( nextOverrides ) => {
+            const metaPatch = Object.assign( {}, meta );
+
+            if ( nextOverrides && Object.keys( nextOverrides ).length ) {
+                metaPatch[ STYLE_META_KEY ] = nextOverrides;
+            } else {
+                delete metaPatch[ STYLE_META_KEY ];
+            }
+
+            editPost( { meta: metaPatch } );
+        }, [ editPost, meta ] );
+
+        const updateOverride = useCallback( ( path, value ) => {
+            const next = setPathValue( overrides, path, value );
+            persist( next );
+        }, [ overrides, persist ] );
+
+        const resetOverride = useCallback( ( path ) => {
+            const next = unsetPathValue( overrides, path );
+            persist( next );
+        }, [ overrides, persist ] );
+
+        return { overrides, updateOverride, resetOverride };
+    };
+
+    const TokenOverrideField = ( { field, tokens, overrides, onChange, onReset } ) => {
+        const overrideValue = getPathValue( overrides, field.path );
+        const inheritedValue = getPathValue( tokens, field.path );
+        const hasOverride = overrideValue !== undefined;
+
+        if ( 'toggle' === field.control ) {
+            const checked = hasOverride ? !! overrideValue : !! inheritedValue;
+            return wp.element.createElement( 'div', { className: 'astra-builder__override-field' + ( hasOverride ? ' has-override' : '' ) },
+                wp.element.createElement( ToggleControl, {
+                    label: field.label,
+                    checked,
+                    help: hasOverride ? __( 'Override active', 'astra-builder' ) : __( 'Inherits global value', 'astra-builder' ),
+                    onChange: ( next ) => onChange( field.path, !! next ),
+                } ),
+                hasOverride ? wp.element.createElement( Button, { isSmall: true, isSecondary: true, onClick: () => onReset( field.path ) }, __( 'Reset', 'astra-builder' ) ) : null
+            );
+        }
+
+        const resolvedValue = hasOverride ? overrideValue : ( inheritedValue === undefined || inheritedValue === null ? '' : inheritedValue );
+
+        const handleChange = ( nextValue ) => {
+            if ( nextValue === '' ) {
+                onReset( field.path );
+                return;
+            }
+            onChange( field.path, nextValue );
+        };
+
+        if ( 'select' === field.control && Array.isArray( field.options ) ) {
+            return wp.element.createElement( 'div', { className: 'astra-builder__override-field' + ( hasOverride ? ' has-override' : '' ) },
+                wp.element.createElement( SelectControl, {
+                    label: field.label,
+                    value: resolvedValue,
+                    options: field.options,
+                    help: hasOverride ? __( 'Override active', 'astra-builder' ) : __( 'Inherits global value', 'astra-builder' ),
+                    onChange: handleChange,
+                } ),
+                hasOverride ? wp.element.createElement( Button, { isSmall: true, isSecondary: true, onClick: () => onReset( field.path ) }, __( 'Reset', 'astra-builder' ) ) : null
+            );
+        }
+
+        return wp.element.createElement( 'div', { className: 'astra-builder__override-field' + ( hasOverride ? ' has-override' : '' ) },
+            wp.element.createElement( TextControl, {
+                label: field.label,
+                value: resolvedValue,
+                placeholder: field.placeholder,
+                help: hasOverride ? __( 'Override active', 'astra-builder' ) : __( 'Inherits global value', 'astra-builder' ),
+                onChange: handleChange,
+            } ),
+            hasOverride ? wp.element.createElement( Button, { isSmall: true, isSecondary: true, onClick: () => onReset( field.path ) }, __( 'Reset', 'astra-builder' ) ) : null
+        );
+    };
+
+    const TemplateOverridesPanel = ( { tokens } ) => {
+        const { overrides, updateOverride, resetOverride } = useTemplateStyleOverrides();
+
+        if ( ! tokens ) {
+            return null;
+        }
+
+        return wp.element.createElement( PanelBody, { title: __( 'Per-template overrides', 'astra-builder' ), initialOpen: false, className: 'astra-builder__overrides-panel' },
+            wp.element.createElement( 'p', { className: 'astra-builder__design-section-description' }, __( 'Override specific tokens for this template only. Reset to fall back to the global system.', 'astra-builder' ) ),
+            DESIGN_SECTIONS.map( ( section ) =>
+                wp.element.createElement( 'div', { className: 'astra-builder__override-section', key: section.id },
+                    wp.element.createElement( 'h4', null, section.title ),
+                    section.fields.map( ( field ) =>
+                        wp.element.createElement( TokenOverrideField, {
+                            key: `${ section.id }-${ field.path }`,
+                            field,
+                            tokens,
+                            overrides,
+                            onChange: updateOverride,
+                            onReset: resetOverride,
+                        } )
+                    )
+                )
+            )
+        );
+    };
+
+    const DesignSystemPanel = () => {
+        const { tokens, isLoading, error, updateToken, saveTokens, isSaving, hasChanges } = useDesignTokens();
+
+        return wp.element.createElement( Card, { className: 'astra-builder__design-card' },
+            wp.element.createElement( CardHeader, null, __( 'Design tokens', 'astra-builder' ) ),
+            wp.element.createElement( CardBody, null,
+                wp.element.createElement( 'p', { className: 'astra-builder__design-description' }, __( 'Manage the site-wide typography, component, and mode tokens. Changes update theme.json and CSS variables automatically.', 'astra-builder' ) ),
+                error ? wp.element.createElement( Notice, { status: 'error', isDismissible: false }, error ) : null,
+                isLoading ? wp.element.createElement( Spinner, null ) : null,
+                tokens ? DESIGN_SECTIONS.map( ( section ) =>
+                    wp.element.createElement( PanelBody, { key: section.id, title: section.title, initialOpen: 'typography' === section.id },
+                        section.description ? wp.element.createElement( 'p', { className: 'astra-builder__design-section-description' }, section.description ) : null,
+                        section.fields.map( ( field ) =>
+                            wp.element.createElement( TokenField, {
+                                key: `${ section.id }-${ field.path }`,
+                                field,
+                                value: getPathValue( tokens, field.path ),
+                                onChange: ( nextValue ) => updateToken( field.path, nextValue ),
+                            } )
+                        )
+                    )
+                ) : null,
+                tokens ? wp.element.createElement( TemplateOverridesPanel, { tokens } ) : null,
+                wp.element.createElement( Button, {
+                    variant: 'primary',
+                    onClick: saveTokens,
+                    isBusy: isSaving,
+                    disabled: ! hasChanges || ! tokens || isSaving,
+                }, hasChanges ? __( 'Save design tokens', 'astra-builder' ) : __( 'Saved', 'astra-builder' ) )
+            )
+        );
+    };
+
     const TemplateConditionsPanel = () => {
         const { meta, conditions } = useSelect( ( select ) => {
             const editor = select( 'core/editor' );
@@ -1022,7 +1427,7 @@
         const [ error, setError ] = useState( null );
         const [ previewLink, setPreviewLink ] = useState( null );
 
-        const { postId, content, status, conditions } = useSelect( ( select ) => {
+        const { postId, content, status, conditions, styles } = useSelect( ( select ) => {
             const editor = select( 'core/editor' );
             const meta = editor.getEditedPostAttribute ? ( editor.getEditedPostAttribute( 'meta' ) || {} ) : {};
             const savedConditions = meta[ CONDITIONS_META_KEY ] || CONDITION_DEFAULTS;
@@ -1031,8 +1436,9 @@
                 content: editor.getEditedPostContent ? editor.getEditedPostContent() : '',
                 status: editor.getEditedPostAttribute ? editor.getEditedPostAttribute( 'status' ) : 'draft',
                 conditions: cloneConditions( savedConditions ),
+                styles: meta[ STYLE_META_KEY ] || {},
             };
-        }, [ CONDITIONS_META_KEY ] );
+        }, [ CONDITIONS_META_KEY, STYLE_META_KEY ] );
 
         const handlePreview = useCallback( () => {
             if ( ! apiFetch || ! postId ) {
@@ -1050,6 +1456,7 @@
                     content,
                     conditions,
                     status,
+                    styles,
                 },
             } ).then( ( response ) => {
                 setIsLoading( false );
@@ -1063,7 +1470,7 @@
                 setIsLoading( false );
                 setError( fetchError && fetchError.message ? fetchError.message : __( 'Failed to create preview.', 'astra-builder' ) );
             } );
-        }, [ postId, content, conditions, status, restNamespace ] );
+        }, [ postId, content, conditions, status, styles, restNamespace ] );
 
         return wp.element.createElement( 'div', { className: 'astra-builder__preview-controls' },
             wp.element.createElement( 'p', null, __( 'Generate a snapshot preview using the current template content and assignments.', 'astra-builder' ) ),
@@ -1588,6 +1995,7 @@
 
         if ( isMobile ) {
             return wp.element.createElement( Fragment, null,
+                wp.element.createElement( DesignSystemPanel, null ),
                 wp.element.createElement( TemplateAssignmentsPanel, null ),
                 wp.element.createElement( PanelBody, {
                     title: __( 'Drag-and-drop layout', 'astra-builder' ),
@@ -1597,6 +2005,7 @@
         }
 
         return wp.element.createElement( Fragment, null,
+            wp.element.createElement( DesignSystemPanel, null ),
             wp.element.createElement( TemplateAssignmentsPanel, null ),
             wp.element.createElement( 'div', { className: 'astra-builder__palette' },
                 wp.element.createElement( 'h2', null, __( 'Block palette', 'astra-builder' ) ),

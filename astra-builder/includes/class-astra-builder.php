@@ -48,11 +48,11 @@ class Astra_Builder {
         require_once __DIR__ . '/rest/class-astra-builder-settings-controller.php';
         require_once __DIR__ . '/rest/class-astra-builder-form-submissions-controller.php';
 
-        $this->services['templates'] = new Astra_Builder_Template_Service();
-        $this->services['templates']->register();
-
         $this->services['tokens'] = new Astra_Builder_Token_Service();
         $this->services['tokens']->register();
+
+        $this->services['templates'] = new Astra_Builder_Template_Service( $this->services['tokens'] );
+        $this->services['templates']->register();
 
         $this->services['forms'] = new Astra_Builder_Form_Service();
         $this->services['forms']->register();
@@ -63,6 +63,7 @@ class Astra_Builder {
         add_action( 'enqueue_block_editor_assets', array( $this, 'enqueue_block_editor_assets' ) );
         add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_frontend_assets' ) );
         add_action( 'rest_api_init', array( $this, 'register_rest_routes' ) );
+        add_action( 'wp_head', array( $this, 'output_global_token_styles' ), 20 );
     }
 
     /**
@@ -152,11 +153,20 @@ class Astra_Builder {
             ),
             'binding'       => $this->services['binding']->get_editor_config(),
             'forms'         => $this->services['forms']->get_editor_config(),
+            'tokens'        => array(
+                'initial' => $this->services['tokens']->get_tokens(),
+            ),
         );
 
         wp_localize_script( 'astra-builder-editor', 'AstraBuilderData', $editor_data );
         wp_enqueue_script( 'astra-builder-editor' );
         wp_enqueue_style( 'astra-builder-editor' );
+
+        $token_css = $this->services['tokens']->render_global_css_styles();
+
+        if ( $token_css ) {
+            wp_add_inline_style( 'astra-builder-editor', $token_css );
+        }
     }
 
     /**
@@ -205,5 +215,22 @@ class Astra_Builder {
 
         wp_localize_script( 'astra-builder-forms', 'AstraBuilderFormsData', $forms_data );
         wp_enqueue_script( 'astra-builder-forms' );
+    }
+
+    /**
+     * Print the global design token CSS variables on the front-end.
+     */
+    public function output_global_token_styles() {
+        if ( empty( $this->services['tokens'] ) ) {
+            return;
+        }
+
+        $css = $this->services['tokens']->render_global_css_styles();
+
+        if ( empty( $css ) ) {
+            return;
+        }
+
+        printf( '<style id="astra-builder-token-styles">%s</style>', wp_strip_all_tags( $css ) );
     }
 }

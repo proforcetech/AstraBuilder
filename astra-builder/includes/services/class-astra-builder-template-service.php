@@ -11,9 +11,26 @@ class Astra_Builder_Template_Service {
     const META_CONDITIONS           = '_astra_builder_conditions';
     const META_RENDERED_MARKUP      = '_astra_builder_rendered_html';
     const META_CRITICAL_CSS         = '_astra_builder_critical_css';
+    const META_STYLE_OVERRIDES      = '_astra_builder_style_overrides';
     const PREVIEW_TRANSIENT_PREFIX  = 'astra_builder_preview_';
     const PREVIEW_QUERY_VAR         = 'astra_builder_preview';
     const PREVIEW_TRANSIENT_EXPIRY  = 6; // Hours.
+
+    /**
+     * Token service dependency.
+     *
+     * @var Astra_Builder_Token_Service|null
+     */
+    protected $tokens;
+
+    /**
+     * Constructor.
+     *
+     * @param Astra_Builder_Token_Service|null $tokens Token service.
+     */
+    public function __construct( ?Astra_Builder_Token_Service $tokens = null ) {
+        $this->tokens = $tokens;
+    }
 
     /**
      * Bootstrap the service.
@@ -121,6 +138,73 @@ class Astra_Builder_Template_Service {
         register_post_meta( self::TEMPLATE_POST_TYPE, self::META_CRITICAL_CSS, $compiled_args );
         register_post_meta( self::COMPONENT_POST_TYPE, self::META_RENDERED_MARKUP, $compiled_args );
         register_post_meta( self::COMPONENT_POST_TYPE, self::META_CRITICAL_CSS, $compiled_args );
+
+        $style_args = array(
+            'type'              => 'object',
+            'single'            => true,
+            'show_in_rest'      => array(
+                'schema' => array(
+                    'type' => 'object',
+                ),
+            ),
+            'auth_callback'     => function() {
+                return current_user_can( 'edit_theme_options' );
+            },
+            'sanitize_callback' => array( $this, 'sanitize_style_overrides' ),
+        );
+
+        register_post_meta( self::TEMPLATE_POST_TYPE, self::META_STYLE_OVERRIDES, $style_args );
+        register_post_meta( self::COMPONENT_POST_TYPE, self::META_STYLE_OVERRIDES, $style_args );
+    }
+
+    /**
+     * Sanitize saved style override data.
+     *
+     * @param mixed $value Raw value.
+     *
+     * @return array
+     */
+    public function sanitize_style_overrides( $value ) {
+        if ( ! is_array( $value ) ) {
+            return array();
+        }
+
+        $sanitized = array();
+
+        foreach ( $value as $key => $item ) {
+            $clean_key = is_string( $key ) ? preg_replace( '/[^a-zA-Z0-9._-]/', '', $key ) : sanitize_key( $key );
+
+            if ( empty( $clean_key ) ) {
+                continue;
+            }
+
+            if ( is_array( $item ) ) {
+                $sanitized[ $clean_key ] = $this->sanitize_style_overrides( $item );
+                continue;
+            }
+
+            if ( is_bool( $item ) ) {
+                $sanitized[ $clean_key ] = (bool) $item;
+                continue;
+            }
+
+            $sanitized[ $clean_key ] = sanitize_text_field( (string) $item );
+        }
+
+        return $sanitized;
+    }
+
+    /**
+     * Retrieve sanitized overrides for a template or component.
+     *
+     * @param int $post_id Post ID.
+     *
+     * @return array
+     */
+    public function get_style_overrides( $post_id ) {
+        $raw = get_post_meta( $post_id, self::META_STYLE_OVERRIDES, true );
+
+        return $this->sanitize_style_overrides( $raw );
     }
 
     /**
@@ -223,7 +307,8 @@ class Astra_Builder_Template_Service {
             return;
         }
 
-        $compiled = $this->compose_template_from_content( $post, $post->post_content );
+        $overrides = $this->get_style_overrides( $post_id );
+        $compiled  = $this->compose_template_from_content( $post, $post->post_content, $overrides );
 
         update_post_meta( $post_id, self::META_RENDERED_MARKUP, $compiled['html'] );
         update_post_meta( $post_id, self::META_CRITICAL_CSS, $compiled['css'] );
@@ -232,12 +317,13 @@ class Astra_Builder_Template_Service {
     /**
      * Compose blocks into markup using current theme supports.
      *
-     * @param WP_Post $post    Post being rendered.
-     * @param string  $content Content to render.
+     * @param WP_Post $post            Post being rendered.
+     * @param string  $content         Content to render.
+     * @param array   $style_overrides Template-specific style overrides.
      *
      * @return array
      */
-    protected function compose_template_from_content( $post, $content ) {
+    protected function compose_template_from_content( $post, $content, $style_overrides = array() ) {
         $blocks = parse_blocks( $content );
         $html   = '';
 
@@ -250,7 +336,7 @@ class Astra_Builder_Template_Service {
 
         $markup = sprintf( '<div class="%s">%s</div>', esc_attr( implode( ' ', $classes ) ), $html );
 
-        $critical_css = $this->extract_critical_css( $content, $supports, $post->ID );
+        $critical_css = $this->extract_critical_css( $content, $supports, $post->ID, $style_overrides );
 
         return array(
             'html'     => $markup,
@@ -299,14 +385,23 @@ class Astra_Builder_Template_Service {
     /**
      * Extract a lightweight CSS bundle for the provided template content.
      *
-     * @param string $content  Template content.
-     * @param array  $supports Theme supports in play.
-     * @param int    $post_id  Post ID.
+     * @param string $content        Template content.
+     * @param array  $supports       Theme supports in play.
+     * @param int    $post_id        Post ID.
+     * @param array  $style_overrides Template-specific overrides.
      *
      * @return string
      */
-    protected function extract_critical_css( $content, $supports, $post_id ) {
+    protected function extract_critical_css( $content, $supports, $post_id, $style_overrides = array() ) {
         $css_chunks = array();
+
+        if ( $this->tokens ) {
+            $override_css = $this->tokens->render_template_override_styles( $style_overrides, $post_id );
+
+            if ( $override_css ) {
+                $css_chunks[] = $override_css;
+            }
+        }
 
         if ( function_exists( 'wp_get_global_stylesheet' ) ) {
             $css_chunks[] = wp_get_global_stylesheet();
@@ -564,6 +659,7 @@ class Astra_Builder_Template_Service {
             'conditions' => self::META_CONDITIONS,
             'markup'     => self::META_RENDERED_MARKUP,
             'css'        => self::META_CRITICAL_CSS,
+            'styles'     => self::META_STYLE_OVERRIDES,
         );
     }
 
@@ -576,11 +672,12 @@ class Astra_Builder_Template_Service {
      * @return array
      */
     public function create_preview_snapshot( $post, $args = array() ) {
-        $content    = isset( $args['content'] ) ? wp_kses_post( $args['content'] ) : $post->post_content;
-        $conditions = isset( $args['conditions'] ) ? $this->sanitize_conditions( $args['conditions'] ) : $this->get_conditions( $post->ID );
-        $status     = isset( $args['status'] ) ? sanitize_key( $args['status'] ) : $post->post_status;
+        $content        = isset( $args['content'] ) ? wp_kses_post( $args['content'] ) : $post->post_content;
+        $conditions     = isset( $args['conditions'] ) ? $this->sanitize_conditions( $args['conditions'] ) : $this->get_conditions( $post->ID );
+        $status         = isset( $args['status'] ) ? sanitize_key( $args['status'] ) : $post->post_status;
+        $style_overrides = isset( $args['styles'] ) ? $this->sanitize_style_overrides( $args['styles'] ) : $this->get_style_overrides( $post->ID );
 
-        $compiled = $this->compose_template_from_content( $post, $content );
+        $compiled = $this->compose_template_from_content( $post, $content, $style_overrides );
         $token    = wp_generate_uuid4();
 
         $snapshot = array(
@@ -593,6 +690,7 @@ class Astra_Builder_Template_Service {
             'html'        => $compiled['html'],
             'css'         => $compiled['css'],
             'supports'    => $compiled['supports'],
+            'styles'      => $style_overrides,
         );
 
         $snapshot['preview_url'] = $this->build_preview_url( $token );
