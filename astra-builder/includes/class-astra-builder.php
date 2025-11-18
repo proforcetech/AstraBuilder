@@ -39,11 +39,14 @@ class Astra_Builder {
     public function init() {
         require_once __DIR__ . '/services/class-astra-builder-template-service.php';
         require_once __DIR__ . '/services/class-astra-builder-token-service.php';
+        require_once __DIR__ . '/services/class-astra-builder-form-service.php';
+        require_once __DIR__ . '/services/class-astra-builder-data-binding-service.php';
         require_once __DIR__ . '/rest/class-astra-builder-rest-controller.php';
         require_once __DIR__ . '/rest/class-astra-builder-templates-controller.php';
         require_once __DIR__ . '/rest/class-astra-builder-tokens-controller.php';
         require_once __DIR__ . '/rest/class-astra-builder-snapshots-controller.php';
         require_once __DIR__ . '/rest/class-astra-builder-settings-controller.php';
+        require_once __DIR__ . '/rest/class-astra-builder-form-submissions-controller.php';
 
         $this->services['templates'] = new Astra_Builder_Template_Service();
         $this->services['templates']->register();
@@ -51,7 +54,14 @@ class Astra_Builder {
         $this->services['tokens'] = new Astra_Builder_Token_Service();
         $this->services['tokens']->register();
 
+        $this->services['forms'] = new Astra_Builder_Form_Service();
+        $this->services['forms']->register();
+
+        $this->services['binding'] = new Astra_Builder_Data_Binding_Service();
+        $this->services['binding']->register();
+
         add_action( 'enqueue_block_editor_assets', array( $this, 'enqueue_block_editor_assets' ) );
+        add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_frontend_assets' ) );
         add_action( 'rest_api_init', array( $this, 'register_rest_routes' ) );
     }
 
@@ -64,6 +74,7 @@ class Astra_Builder {
             new Astra_Builder_REST_Tokens_Controller( $this->services['tokens'] ),
             new Astra_Builder_REST_Snapshots_Controller( $this->services['tokens'] ),
             new Astra_Builder_REST_Settings_Controller( $this->services['tokens'] ),
+            new Astra_Builder_REST_Form_Submissions_Controller( $this->services['forms'] ),
         );
 
         foreach ( $controllers as $controller ) {
@@ -139,10 +150,60 @@ class Astra_Builder {
             'preview'       => array(
                 'queryVar' => Astra_Builder_Template_Service::PREVIEW_QUERY_VAR,
             ),
+            'binding'       => $this->services['binding']->get_editor_config(),
+            'forms'         => $this->services['forms']->get_editor_config(),
         );
 
         wp_localize_script( 'astra-builder-editor', 'AstraBuilderData', $editor_data );
         wp_enqueue_script( 'astra-builder-editor' );
         wp_enqueue_style( 'astra-builder-editor' );
+    }
+
+    /**
+     * Enqueue assets for the front-end, specifically for form handling.
+     */
+    public function enqueue_frontend_assets() {
+        if ( is_admin() ) {
+            return;
+        }
+
+        if ( ! function_exists( 'has_block' ) ) {
+            return;
+        }
+
+        if ( ! is_singular() ) {
+            return;
+        }
+
+        global $post;
+
+        if ( ! $post || ! has_block( 'astra-builder/form', $post->post_content ) ) {
+            return;
+        }
+
+        $plugin_file = dirname( __DIR__ ) . '/astra-builder.php';
+        $asset_base  = plugin_dir_url( $plugin_file );
+        $asset_path  = plugin_dir_path( $plugin_file );
+
+        wp_register_script(
+            'astra-builder-forms',
+            $asset_base . 'assets/frontend.js',
+            array(),
+            filemtime( $asset_path . 'assets/frontend.js' ),
+            true
+        );
+
+        $forms_data = array(
+            'endpoint' => rest_url( 'astra-builder/v1/form-submissions' ),
+            'spam'     => $this->services['forms']->get_spam_settings(),
+            'messages' => array(
+                'success' => __( 'Thanks! Your submission was received.', 'astra-builder' ),
+                'error'   => __( 'There was a problem submitting the form.', 'astra-builder' ),
+                'sending' => __( 'Sending…', 'astra-builder' ),
+            ),
+        );
+
+        wp_localize_script( 'astra-builder-forms', 'AstraBuilderFormsData', $forms_data );
+        wp_enqueue_script( 'astra-builder-forms' );
     }
 }

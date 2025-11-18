@@ -331,6 +331,82 @@
     padding: 0;
 }
 
+.astra-builder-wrapper-editor,
+.astra-builder-form-editor {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 16px;
+    background: #ffffff;
+    margin-bottom: 24px;
+}
+
+.astra-builder-wrapper-preview,
+.astra-builder-form-editor__preview,
+.astra-builder-form-editor__meta {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+}
+
+.astra-builder-wrapper-preview span,
+.astra-builder-form-editor__preview span,
+.astra-builder-form__steps-indicator span {
+    background: #e0e7ff;
+    color: #312e81;
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+}
+
+.astra-builder-wrapper-preview span.is-active,
+.astra-builder-form-editor__preview span.is-active,
+.astra-builder-form__steps-indicator span.is-active {
+    background: #4c1d95;
+    color: #ffffff;
+}
+
+.astra-builder-wrapper-panel,
+.astra-builder-form-step,
+.astra-builder-form-field {
+    margin-bottom: 12px;
+}
+
+.astra-builder-form__field {
+    margin-bottom: 12px;
+}
+
+.astra-builder-form__label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.astra-builder-form__help {
+    display: block;
+    margin-top: 4px;
+    color: #64748b;
+    font-size: 12px;
+}
+
+.astra-builder-form__step-controls {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.astra-builder-form__status[data-status='pending'] {
+    color: #a16207;
+}
+
+.astra-builder-form__status[data-status='error'] {
+    color: #b91c1c;
+}
+
+.astra-builder-form__status[data-status='success'] {
+    color: #15803d;
+}
+
 @media ( max-width: 960px ) {
     .astra-builder__inline {
         flex-direction: column;
