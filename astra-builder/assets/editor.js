@@ -2,11 +2,40 @@
     const { registerPlugin } = wp.plugins;
     const { __, sprintf } = wp.i18n;
     const { Fragment, useCallback, useMemo, useState } = wp.element;
-    const { PanelBody, Card, CardBody, CardHeader, Icon, Button, ButtonGroup, TextControl, Notice } = wp.components;
+    const { PanelBody, Card, CardBody, CardHeader, Icon, Button, ButtonGroup, TextControl, Notice, CheckboxControl } = wp.components;
     const { PluginSidebarMoreMenuItem, PluginSidebar } = wp.editPost || {};
     const { createBlock, getBlockType } = wp.blocks;
     const { useDispatch, useSelect } = wp.data;
     const { useViewportMatch } = wp.compose;
+    const apiFetch = wp.apiFetch ? wp.apiFetch : null;
+
+    const pluginData = window.AstraBuilderData || {};
+    const metaKeys = pluginData.metaKeys || {};
+    const restNamespace = pluginData.restNamespace || 'astra-builder/v1';
+    const conditionOptions = pluginData.conditions || {};
+
+    const sanitizeConditionList = ( list ) => Array.from( new Set( ( Array.isArray( list ) ? list : [] ).filter( Boolean ) ) );
+
+    const getDefaultConditionList = ( key ) => {
+        if ( pluginData.defaults && pluginData.defaults.conditions && Array.isArray( pluginData.defaults.conditions[ key ] ) ) {
+            return pluginData.defaults.conditions[ key ];
+        }
+        return [];
+    };
+
+    const CONDITION_DEFAULTS = {
+        postTypes: sanitizeConditionList( getDefaultConditionList( 'postTypes' ) ),
+        taxonomies: sanitizeConditionList( getDefaultConditionList( 'taxonomies' ) ),
+        roles: sanitizeConditionList( getDefaultConditionList( 'roles' ) ),
+    };
+
+    const cloneConditions = ( source ) => ({
+        postTypes: sanitizeConditionList( source && source.postTypes ? source.postTypes : CONDITION_DEFAULTS.postTypes ),
+        taxonomies: sanitizeConditionList( source && source.taxonomies ? source.taxonomies : CONDITION_DEFAULTS.taxonomies ),
+        roles: sanitizeConditionList( source && source.roles ? source.roles : CONDITION_DEFAULTS.roles ),
+    });
+
+    const CONDITIONS_META_KEY = metaKeys.conditions || '_astra_builder_conditions';
 
     const canvasUtils = window.AstraBuilderCanvas || {};
     const {
@@ -112,6 +141,158 @@
         NEW_BLOCK: 'astra-builder/new-block',
         EXISTING_BLOCK: 'astra-builder/existing-block',
     };
+
+    const ConditionChecklist = ( { items, value, onChange } ) => {
+        if ( ! items || ! items.length ) {
+            return wp.element.createElement( 'p', { className: 'astra-builder__conditions-empty' }, __( 'No options available for this condition.', 'astra-builder' ) );
+        }
+
+        return wp.element.createElement( Fragment, null,
+            items.map( ( item ) => wp.element.createElement( CheckboxControl, {
+                key: item.slug,
+                label: item.label || item.slug,
+                checked: value.includes( item.slug ),
+                onChange: ( isChecked ) => {
+                    const next = value.slice();
+                    const index = next.indexOf( item.slug );
+                    if ( isChecked && index === -1 ) {
+                        next.push( item.slug );
+                    } else if ( ! isChecked && index > -1 ) {
+                        next.splice( index, 1 );
+                    }
+                    onChange( sanitizeConditionList( next ) );
+                },
+            } ) )
+        );
+    };
+
+    const TemplateConditionsPanel = () => {
+        const { meta, conditions } = useSelect( ( select ) => {
+            const editor = select( 'core/editor' );
+            const editedMeta = editor.getEditedPostAttribute ? ( editor.getEditedPostAttribute( 'meta' ) || {} ) : {};
+            const savedConditions = editedMeta[ CONDITIONS_META_KEY ] || CONDITION_DEFAULTS;
+            return {
+                meta: editedMeta,
+                conditions: cloneConditions( savedConditions ),
+            };
+        }, [ CONDITIONS_META_KEY ] );
+
+        const { editPost } = useDispatch( 'core/editor' );
+
+        const updateConditions = useCallback( ( key, values ) => {
+            const next = cloneConditions( conditions );
+            next[ key ] = sanitizeConditionList( values );
+            editPost( { meta: Object.assign( {}, meta, { [ CONDITIONS_META_KEY ]: next } ) } );
+        }, [ conditions, editPost, meta ] );
+
+        const postTypeOptions = conditionOptions.postTypes || [];
+        const taxonomyOptions = conditionOptions.taxonomies || [];
+        const roleOptions = conditionOptions.roles || [];
+
+        return wp.element.createElement( 'div', { className: 'astra-builder__conditions-panel' },
+            wp.element.createElement( 'p', { className: 'astra-builder__conditions-description' }, __( 'Assign this template to specific post types, taxonomy archives, or user roles.', 'astra-builder' ) ),
+            wp.element.createElement( 'div', { className: 'astra-builder__conditions-grid' },
+                wp.element.createElement( 'div', { className: 'astra-builder__conditions-group' },
+                    wp.element.createElement( 'h4', null, __( 'Post types', 'astra-builder' ) ),
+                    wp.element.createElement( ConditionChecklist, {
+                        items: postTypeOptions,
+                        value: conditions.postTypes,
+                        onChange: ( next ) => updateConditions( 'postTypes', next ),
+                    } )
+                ),
+                wp.element.createElement( 'div', { className: 'astra-builder__conditions-group' },
+                    wp.element.createElement( 'h4', null, __( 'Taxonomies', 'astra-builder' ) ),
+                    wp.element.createElement( ConditionChecklist, {
+                        items: taxonomyOptions,
+                        value: conditions.taxonomies,
+                        onChange: ( next ) => updateConditions( 'taxonomies', next ),
+                    } )
+                ),
+                wp.element.createElement( 'div', { className: 'astra-builder__conditions-group' },
+                    wp.element.createElement( 'h4', null, __( 'User roles', 'astra-builder' ) ),
+                    wp.element.createElement( ConditionChecklist, {
+                        items: roleOptions,
+                        value: conditions.roles,
+                        onChange: ( next ) => updateConditions( 'roles', next ),
+                    } )
+                )
+            )
+        );
+    };
+
+    const TemplatePreviewControls = () => {
+        const [ isLoading, setIsLoading ] = useState( false );
+        const [ error, setError ] = useState( null );
+        const [ previewLink, setPreviewLink ] = useState( null );
+
+        const { postId, content, status, conditions } = useSelect( ( select ) => {
+            const editor = select( 'core/editor' );
+            const meta = editor.getEditedPostAttribute ? ( editor.getEditedPostAttribute( 'meta' ) || {} ) : {};
+            const savedConditions = meta[ CONDITIONS_META_KEY ] || CONDITION_DEFAULTS;
+            return {
+                postId: editor.getCurrentPostId ? editor.getCurrentPostId() : null,
+                content: editor.getEditedPostContent ? editor.getEditedPostContent() : '',
+                status: editor.getEditedPostAttribute ? editor.getEditedPostAttribute( 'status' ) : 'draft',
+                conditions: cloneConditions( savedConditions ),
+            };
+        }, [ CONDITIONS_META_KEY ] );
+
+        const handlePreview = useCallback( () => {
+            if ( ! apiFetch || ! postId ) {
+                setError( __( 'Previewing is unavailable right now.', 'astra-builder' ) );
+                return;
+            }
+
+            setIsLoading( true );
+            setError( null );
+
+            apiFetch( {
+                path: '/' + restNamespace + '/templates/' + postId + '/preview',
+                method: 'POST',
+                data: {
+                    content,
+                    conditions,
+                    status,
+                },
+            } ).then( ( response ) => {
+                setIsLoading( false );
+                if ( response && response.preview_url ) {
+                    setPreviewLink( response.preview_url );
+                    window.open( response.preview_url, '_blank', 'noopener' );
+                } else {
+                    setError( __( 'Preview created but no URL was returned.', 'astra-builder' ) );
+                }
+            } ).catch( ( fetchError ) => {
+                setIsLoading( false );
+                setError( fetchError && fetchError.message ? fetchError.message : __( 'Failed to create preview.', 'astra-builder' ) );
+            } );
+        }, [ postId, content, conditions, status, restNamespace ] );
+
+        return wp.element.createElement( 'div', { className: 'astra-builder__preview-controls' },
+            wp.element.createElement( 'p', null, __( 'Generate a snapshot preview using the current template content and assignments.', 'astra-builder' ) ),
+            error ? wp.element.createElement( Notice, { status: 'error', isDismissible: false }, error ) : null,
+            previewLink ? wp.element.createElement( 'p', { className: 'astra-builder__preview-meta' },
+                __( 'Latest preview ready.', 'astra-builder' ),
+                ' ',
+                wp.element.createElement( 'a', { href: previewLink, target: '_blank', rel: 'noopener noreferrer' }, __( 'Open preview', 'astra-builder' ) )
+            ) : null,
+            wp.element.createElement( Button, {
+                variant: 'primary',
+                onClick: handlePreview,
+                isBusy: isLoading,
+                disabled: ! postId,
+            }, __( 'Preview template', 'astra-builder' ) )
+        );
+    };
+
+    const TemplateAssignmentsPanel = () =>
+        wp.element.createElement( Card, { className: 'astra-builder__template-settings' },
+            wp.element.createElement( CardHeader, null, __( 'Template assignments', 'astra-builder' ) ),
+            wp.element.createElement( CardBody, null,
+                wp.element.createElement( TemplateConditionsPanel, null ),
+                wp.element.createElement( TemplatePreviewControls, null )
+            )
+        );
 
     const { addFilter } = wp.hooks || {};
 
@@ -598,13 +779,17 @@
         const isMobile = useViewportMatch( 'medium', '<' );
 
         if ( isMobile ) {
-            return wp.element.createElement( PanelBody, {
-                title: __( 'Drag-and-drop layout', 'astra-builder' ),
-                initialOpen: true,
-            }, wp.element.createElement( 'p', null, __( 'The layout builder works best on larger screens. Rotate your device or use a desktop to reorder blocks.', 'astra-builder' ) ) );
+            return wp.element.createElement( Fragment, null,
+                wp.element.createElement( TemplateAssignmentsPanel, null ),
+                wp.element.createElement( PanelBody, {
+                    title: __( 'Drag-and-drop layout', 'astra-builder' ),
+                    initialOpen: true,
+                }, wp.element.createElement( 'p', null, __( 'The layout builder works best on larger screens. Rotate your device or use a desktop to reorder blocks.', 'astra-builder' ) ) )
+            );
         }
 
         return wp.element.createElement( Fragment, null,
+            wp.element.createElement( TemplateAssignmentsPanel, null ),
             wp.element.createElement( 'div', { className: 'astra-builder__palette' },
                 wp.element.createElement( 'h2', null, __( 'Block palette', 'astra-builder' ) ),
                 wp.element.createElement( 'p', null, __( 'Drag components onto the canvas to compose your page.', 'astra-builder' ) ),

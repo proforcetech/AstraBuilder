@@ -73,6 +73,30 @@ class Astra_Builder_REST_Templates_Controller extends Astra_Builder_REST_Control
                 ),
             )
         );
+
+        register_rest_route(
+            $this->namespace,
+            '/' . $this->rest_base . '/(?P<id>\d+)/preview',
+            array(
+                array(
+                    'methods'             => WP_REST_Server::CREATABLE,
+                    'callback'            => array( $this, 'create_preview' ),
+                    'permission_callback' => array( $this, 'can_read_templates' ),
+                ),
+            )
+        );
+
+        register_rest_route(
+            $this->namespace,
+            '/' . $this->rest_base . '/preview/(?P<token>[a-z0-9-]+)',
+            array(
+                array(
+                    'methods'             => WP_REST_Server::READABLE,
+                    'callback'            => array( $this, 'get_preview' ),
+                    'permission_callback' => array( $this, 'can_read_templates' ),
+                ),
+            )
+        );
     }
 
     /**
@@ -213,12 +237,18 @@ class Astra_Builder_REST_Templates_Controller extends Astra_Builder_REST_Control
      * @return array
      */
     protected function prepare_item_for_database( WP_REST_Request $request ) {
+        $meta_input = (array) $request->get_param( 'meta' );
+
+        if ( null !== $request->get_param( 'conditions' ) ) {
+            $meta_input[ Astra_Builder_Template_Service::META_CONDITIONS ] = $this->templates->sanitize_conditions( $request->get_param( 'conditions' ) );
+        }
+
         return array(
             'post_type'    => $request->get_param( 'type' ) ? sanitize_key( $request->get_param( 'type' ) ) : Astra_Builder_Template_Service::TEMPLATE_POST_TYPE,
             'post_status'  => $request->get_param( 'status' ) ? sanitize_key( $request->get_param( 'status' ) ) : 'publish',
             'post_title'   => sanitize_text_field( $request->get_param( 'title' ) ),
             'post_content' => wp_kses_post( $request->get_param( 'content' ) ),
-            'meta_input'   => (array) $request->get_param( 'meta' ),
+            'meta_input'   => $meta_input,
         );
     }
 
@@ -238,6 +268,52 @@ class Astra_Builder_REST_Templates_Controller extends Astra_Builder_REST_Control
             'type'    => $post->post_type,
             'status'  => $post->post_status,
             'meta'    => get_post_meta( $post->ID ),
+            'conditions' => $this->templates->get_conditions( $post->ID ),
+            'rendered'   => $this->templates->get_compiled_template( $post->ID ),
         );
+    }
+
+    /**
+     * Create a preview snapshot for a template.
+     *
+     * @param WP_REST_Request $request Request data.
+     *
+     * @return WP_REST_Response|WP_Error
+     */
+    public function create_preview( WP_REST_Request $request ) {
+        $post = $this->templates->get_post( $request['id'] );
+
+        if ( ! $post ) {
+            return new WP_Error( 'astra_builder_not_found', __( 'Template not found.', 'astra-builder' ), array( 'status' => 404 ) );
+        }
+
+        $snapshot = $this->templates->create_preview_snapshot(
+            $post,
+            array(
+                'content'    => $request->get_param( 'content' ),
+                'conditions' => $request->get_param( 'conditions' ),
+                'status'     => $request->get_param( 'status' ),
+            )
+        );
+
+        return rest_ensure_response( $snapshot );
+    }
+
+    /**
+     * Retrieve a preview snapshot by token.
+     *
+     * @param WP_REST_Request $request Request data.
+     *
+     * @return WP_REST_Response|WP_Error
+     */
+    public function get_preview( WP_REST_Request $request ) {
+        $token    = sanitize_text_field( $request['token'] );
+        $snapshot = $this->templates->get_preview_snapshot( $token );
+
+        if ( ! $snapshot ) {
+            return new WP_Error( 'astra_builder_preview_not_found', __( 'Preview not found or expired.', 'astra-builder' ), array( 'status' => 404 ) );
+        }
+
+        return rest_ensure_response( $snapshot );
     }
 }

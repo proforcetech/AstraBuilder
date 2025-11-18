@@ -128,6 +128,20 @@ class Astra_Builder {
 
         wp_enqueue_script( 'astra-builder-canvas-renderer' );
         wp_enqueue_script( 'astra-builder-responsive-context' );
+
+        $editor_data = array(
+            'conditions'    => $this->services['templates']->get_condition_options(),
+            'metaKeys'      => $this->services['templates']->get_meta_keys(),
+            'defaults'      => array(
+                'conditions' => $this->services['templates']->get_default_conditions(),
+            ),
+            'restNamespace' => 'astra-builder/v1',
+            'preview'       => array(
+                'queryVar' => Astra_Builder_Template_Service::PREVIEW_QUERY_VAR,
+            ),
+        );
+
+        wp_localize_script( 'astra-builder-editor', 'AstraBuilderData', $editor_data );
         wp_enqueue_script( 'astra-builder-editor' );
         wp_enqueue_style( 'astra-builder-editor' );
     }
