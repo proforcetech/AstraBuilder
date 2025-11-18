@@ -35,6 +35,78 @@
     font-size: 13px;
 }
 
+.astra-builder__template-settings {
+    margin-bottom: 24px;
+    border: 1px solid #dbe4ef;
+    border-radius: 6px;
+}
+
+.astra-builder__template-settings .components-card__body {
+    padding-top: 8px;
+}
+
+.astra-builder__conditions-panel {
+    margin-bottom: 16px;
+}
+
+.astra-builder__conditions-description {
+    margin: 0 0 12px;
+    color: #475569;
+    font-size: 13px;
+}
+
+.astra-builder__conditions-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+}
+
+.astra-builder__conditions-group {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 12px;
+}
+
+.astra-builder__conditions-group h4 {
+    margin: 0 0 8px;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #475569;
+}
+
+.astra-builder__conditions-empty {
+    margin: 0;
+    font-size: 12px;
+    color: #6b7280;
+}
+
+.astra-builder__preview-controls {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid #e2e8f0;
+}
+
+.astra-builder__preview-controls p {
+    margin-top: 0;
+    color: #475569;
+}
+
+.astra-builder__preview-meta {
+    font-size: 12px;
+    color: #475569;
+}
+
+.astra-builder__preview-meta a {
+    color: #2563eb;
+    text-decoration: none;
+}
+
+.astra-builder__preview-meta a:hover {
+    text-decoration: underline;
+}
+
 .astra-builder__palette-item {
     cursor: grab;
     margin-bottom: 12px;
