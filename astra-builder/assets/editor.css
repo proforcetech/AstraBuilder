@@ -57,6 +57,69 @@
     min-height: 240px;
 }
 
+.astra-builder__inspector {
+    flex: 0 0 320px;
+    background: #ffffff;
+    border: 1px solid #dbe4ef;
+    border-radius: 6px;
+    padding: 16px;
+    align-self: flex-start;
+    box-sizing: border-box;
+}
+
+.astra-builder__inspector .components-panel__body {
+    margin-bottom: 16px;
+}
+
+.astra-builder__inspector .components-panel__body:last-child {
+    margin-bottom: 0;
+}
+
+.astra-builder__inspector-target {
+    margin: 0 0 12px;
+    font-weight: 600;
+    color: #111827;
+}
+
+.astra-builder__breakpoint-toolbar {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+}
+
+.astra-builder__responsive-description {
+    margin-top: 0;
+    color: #475569;
+    font-size: 12px;
+}
+
+.astra-builder__responsive-control {
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px dashed #e2e8f0;
+}
+
+.astra-builder__responsive-control:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+}
+
+.astra-builder__responsive-control.has-override .components-base-control__label::after {
+    content: '';
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    margin-left: 6px;
+    background: #6366f1;
+    vertical-align: middle;
+}
+
+.astra-builder__responsive-control .components-button.is-small {
+    margin-top: 4px;
+}
+
 :root {
     --astra-builder-row-height: 72px;
 }
@@ -203,5 +266,9 @@
 
     .astra-builder__palette {
         flex-basis: auto;
+    }
+
+    .astra-builder__inspector {
+        width: 100%;
     }
 }
