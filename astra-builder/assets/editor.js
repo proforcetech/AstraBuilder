@@ -1,20 +1,817 @@
 ( function( wp ) {
     const { registerPlugin } = wp.plugins;
     const { __, sprintf } = wp.i18n;
-    const { Fragment, useCallback, useMemo, useState } = wp.element;
-    const { PanelBody, Card, CardBody, CardHeader, Icon, Button, ButtonGroup, TextControl, Notice, CheckboxControl } = wp.components;
+    const { Fragment, useCallback, useMemo, useState, useEffect } = wp.element;
+    const {
+        PanelBody,
+        Card,
+        CardBody,
+        CardHeader,
+        Icon,
+        Button,
+        ButtonGroup,
+        TextControl,
+        Notice,
+        CheckboxControl,
+        SelectControl,
+        TextareaControl,
+        ToggleControl,
+        RangeControl,
+    } = wp.components;
     const { PluginSidebarMoreMenuItem, PluginSidebar } = wp.editPost || {};
-    const { createBlock, getBlockType } = wp.blocks;
+    const blockEditor = wp.blockEditor || wp.editor || {};
+    const InspectorControls = blockEditor.InspectorControls || null;
+    const InnerBlocks = blockEditor.InnerBlocks || null;
+    const RichText = blockEditor.RichText || null;
+    const useBlockProps = blockEditor.useBlockProps ? blockEditor.useBlockProps : ( () => ( {} ) );
+    const useBlockPropsSave = blockEditor.useBlockProps && blockEditor.useBlockProps.save ? blockEditor.useBlockProps.save : ( () => ( {} ) );
+    const { registerBlockType, createBlock, getBlockType } = wp.blocks;
     const { useDispatch, useSelect } = wp.data;
     const { useViewportMatch } = wp.compose;
+    const { addFilter } = wp.hooks || {};
     const apiFetch = wp.apiFetch ? wp.apiFetch : null;
 
     const pluginData = window.AstraBuilderData || {};
     const metaKeys = pluginData.metaKeys || {};
     const restNamespace = pluginData.restNamespace || 'astra-builder/v1';
     const conditionOptions = pluginData.conditions || {};
+    const bindingConfig = pluginData.binding || {};
+    const formConfig = pluginData.forms || {};
+
+    const defaultSpamSettings = formConfig.spam || {};
 
     const sanitizeConditionList = ( list ) => Array.from( new Set( ( Array.isArray( list ) ? list : [] ).filter( Boolean ) ) );
+
+    const AstraBlockRegistry = ( () => {
+        const presets = [];
+        const wrappers = [];
+        const inspectorControls = {};
+
+        const registerPreset = ( slug, config ) => {
+            if ( ! config || ! config.blockName ) {
+                return;
+            }
+            presets.push( Object.assign( { slug }, config ) );
+        };
+
+        const getPresetBlueprints = () => presets.map( ( preset ) => ( {
+            name: preset.blockName,
+            title: preset.title || preset.slug,
+            description: preset.description || '',
+            attributes: preset.attributes || {},
+            innerBlocks: preset.innerBlocks || [],
+        } ) );
+
+        const getWrapperBlueprints = () => wrappers.map( ( wrapper ) => ( {
+            name: wrapper.name,
+            title: wrapper.title,
+            description: wrapper.description,
+        } ) );
+
+        const registerInspectorControl = ( blockName, ControlComponent ) => {
+            if ( ! blockName || ! ControlComponent ) {
+                return;
+            }
+            if ( ! inspectorControls[ blockName ] ) {
+                inspectorControls[ blockName ] = [];
+            }
+            inspectorControls[ blockName ].push( ControlComponent );
+        };
+
+        if ( addFilter ) {
+            addFilter( 'editor.BlockEdit', 'astra-builder/custom-inspectors', ( BlockEdit ) => ( props ) => {
+                const list = ( inspectorControls[ props.name ] || [] ).concat( inspectorControls['*'] || [] );
+                if ( ! list.length ) {
+                    return wp.element.createElement( BlockEdit, props );
+                }
+                return wp.element.createElement(
+                    Fragment,
+                    null,
+                    wp.element.createElement( BlockEdit, props ),
+                    list.map( ( ControlComponent, index ) =>
+                        wp.element.createElement( ControlComponent, Object.assign( {}, props, { key: `${ props.clientId }-control-${ index }` } ) )
+                    )
+                );
+            } );
+        }
+
+        const registerWrapperBlock = ( name, settings ) => {
+            if ( ! registerBlockType || ! settings || ! settings.block ) {
+                return;
+            }
+
+            registerBlockType( name, settings.block );
+            if ( settings.palette ) {
+                wrappers.push( Object.assign( { name }, settings.palette ) );
+            }
+        };
+
+        return {
+            registerPreset,
+            getPresetBlueprints,
+            registerWrapperBlock,
+            registerInspectorControl,
+            getWrapperBlueprints,
+        };
+    } )();
+
+    const bindingSources = bindingConfig.sources || {};
+    const bindingSourceOptions = Object.keys( bindingSources ).map( ( key ) => ( {
+        value: key,
+        label: bindingSources[ key ] && bindingSources[ key ].label ? bindingSources[ key ].label : key,
+    } ) );
+
+    const DataBindingInspector = ( props ) => {
+        if ( ! InspectorControls ) {
+            return null;
+        }
+
+        const { attributes, setAttributes, name } = props;
+        if ( ! attributes || ! Object.prototype.hasOwnProperty.call( attributes, 'astraBinding' ) ) {
+            return null;
+        }
+
+        const binding = attributes.astraBinding || {};
+        const selectedSource = binding.source || ( bindingSourceOptions[ 0 ] ? bindingSourceOptions[ 0 ].value : 'wp_field' );
+        const sourceOptions = bindingSources[ selectedSource ] && Array.isArray( bindingSources[ selectedSource ].options ) ? bindingSources[ selectedSource ].options : [];
+        const blockType = getBlockType( name );
+        const attributeOptions = blockType && blockType.attributes ? Object.keys( blockType.attributes ).map( ( attr ) => ( { label: attr, value: attr } ) ) : [];
+
+        const updateBinding = ( next ) => {
+            setAttributes( { astraBinding: Object.assign( {}, binding, next ) } );
+        };
+
+        const resetBinding = () => {
+            setAttributes( { astraBinding: {} } );
+        };
+
+        return wp.element.createElement( InspectorControls, { group: 'advanced' },
+            wp.element.createElement( PanelBody, { title: __( 'Data binding', 'astra-builder' ), initialOpen: false },
+                bindingSourceOptions.length ? wp.element.createElement( SelectControl, {
+                    label: __( 'Source', 'astra-builder' ),
+                    value: selectedSource,
+                    options: bindingSourceOptions,
+                    onChange: ( value ) => updateBinding( { source: value, key: '' } ),
+                } ) : null,
+                sourceOptions.length ? wp.element.createElement( SelectControl, {
+                    label: __( 'Field or key', 'astra-builder' ),
+                    value: binding.key || '',
+                    options: sourceOptions,
+                    onChange: ( value ) => updateBinding( { key: value } ),
+                } ) : wp.element.createElement( TextControl, {
+                    label: __( 'Field or key', 'astra-builder' ),
+                    value: binding.key || '',
+                    onChange: ( value ) => updateBinding( { key: value } ),
+                } ),
+                attributeOptions.length ? wp.element.createElement( SelectControl, {
+                    label: __( 'Target attribute', 'astra-builder' ),
+                    value: binding.attribute || '',
+                    options: [ { label: __( 'Select attribute', 'astra-builder' ), value: '' } ].concat( attributeOptions ),
+                    onChange: ( value ) => updateBinding( { attribute: value } ),
+                } ) : wp.element.createElement( TextControl, {
+                    label: __( 'Target attribute', 'astra-builder' ),
+                    value: binding.attribute || '',
+                    onChange: ( value ) => updateBinding( { attribute: value } ),
+                } ),
+                wp.element.createElement( Button, { onClick: resetBinding, isSecondary: true }, __( 'Clear binding', 'astra-builder' ) )
+            )
+        );
+    };
+
+    AstraBlockRegistry.registerInspectorControl( '*', DataBindingInspector );
+
+    const generatePanelId = () => 'panel-' + Math.random().toString( 36 ).slice( 2, 10 );
+
+    const getDefaultPanel = ( index ) => ( {
+        id: generatePanelId(),
+        label: sprintf( __( 'Panel %d', 'astra-builder' ), index ),
+        content: '',
+    } );
+
+    const ensurePanels = ( panels ) => {
+        if ( Array.isArray( panels ) && panels.length ) {
+            return panels;
+        }
+        return [ getDefaultPanel( 1 ) ];
+    };
+
+    const renderPanelContent = ( panel ) => {
+        if ( RichText && RichText.Content ) {
+            return wp.element.createElement( RichText.Content, {
+                tagName: 'div',
+                className: 'astra-builder-wrapper__panel-content',
+                value: panel.content,
+            } );
+        }
+
+        return wp.element.createElement( 'div', {
+            className: 'astra-builder-wrapper__panel-content',
+            dangerouslySetInnerHTML: { __html: panel.content || '' },
+        } );
+    };
+
+    const createWrapperEditComponent = ( variant ) => ( props ) => {
+        const { attributes, setAttributes } = props;
+        const panels = ensurePanels( attributes.panels || [] );
+        const blockProps = useBlockProps( { className: `astra-builder-wrapper-editor is-${ variant }` } );
+
+        useEffect( () => {
+            if ( ! attributes.panels || ! attributes.panels.length ) {
+                setAttributes( { panels } );
+            }
+        }, [] );
+
+        const updatePanels = ( nextPanels ) => {
+            setAttributes( { panels: nextPanels } );
+        };
+
+        const updatePanel = ( panelId, payload ) => {
+            const nextPanels = panels.map( ( panel ) => ( panel.id === panelId ? Object.assign( {}, panel, payload ) : panel ) );
+            updatePanels( nextPanels );
+        };
+
+        const addPanel = () => {
+            const nextPanel = getDefaultPanel( panels.length + 1 );
+            updatePanels( panels.concat( nextPanel ) );
+        };
+
+        const removePanel = ( panelId ) => {
+            if ( panels.length <= 1 ) {
+                return;
+            }
+            updatePanels( panels.filter( ( panel ) => panel.id !== panelId ) );
+        };
+
+        return wp.element.createElement( 'div', blockProps,
+            wp.element.createElement( 'div', { className: 'astra-builder-wrapper-preview' },
+                panels.map( ( panel, index ) =>
+                    wp.element.createElement( 'span', {
+                        key: panel.id,
+                        className: index === 0 ? 'is-active' : '',
+                    }, panel.label || sprintf( __( 'Panel %d', 'astra-builder' ), index + 1 ) )
+                )
+            ),
+            panels.map( ( panel ) => wp.element.createElement( Card, { key: panel.id, className: 'astra-builder-wrapper-panel' },
+                wp.element.createElement( CardHeader, null, panel.label || __( 'Panel', 'astra-builder' ) ),
+                wp.element.createElement( CardBody, null,
+                    wp.element.createElement( TextControl, {
+                        label: __( 'Label', 'astra-builder' ),
+                        value: panel.label,
+                        onChange: ( value ) => updatePanel( panel.id, { label: value } ),
+                    } ),
+                    RichText ? wp.element.createElement( RichText, {
+                        tagName: 'div',
+                        value: panel.content,
+                        onChange: ( value ) => updatePanel( panel.id, { content: value } ),
+                        placeholder: __( 'Panel content…', 'astra-builder' ),
+                    } ) : wp.element.createElement( TextareaControl, {
+                        label: __( 'Content', 'astra-builder' ),
+                        value: panel.content,
+                        onChange: ( value ) => updatePanel( panel.id, { content: value } ),
+                    } ),
+                    panels.length > 1 ? wp.element.createElement( Button, {
+                        isDestructive: true,
+                        variant: 'secondary',
+                        onClick: () => removePanel( panel.id ),
+                    }, __( 'Remove panel', 'astra-builder' ) ) : null
+                )
+            ) ),
+            wp.element.createElement( Button, { onClick: addPanel, variant: 'secondary' }, __( 'Add panel', 'astra-builder' ) )
+        );
+    };
+
+    const createWrapperSaveComponent = ( variant ) => ( props ) => {
+        const { attributes } = props;
+        const panels = ensurePanels( attributes.panels || [] );
+        const blockProps = useBlockPropsSave( {
+            className: `astra-builder-wrapper is-${ variant }`,
+            'data-wrapper-variant': variant,
+            'data-autoplay': attributes.autoplay ? 'true' : 'false',
+            'data-interval': attributes.interval || 5,
+        } );
+
+        return wp.element.createElement( 'div', blockProps,
+            wp.element.createElement( 'div', { className: 'astra-builder-wrapper__nav' },
+                panels.map( ( panel, index ) =>
+                    wp.element.createElement( 'button', {
+                        key: panel.id,
+                        type: 'button',
+                        className: 'astra-builder-wrapper__tab' + ( 0 === index ? ' is-active' : '' ),
+                        tabIndex: -1,
+                    }, panel.label || sprintf( __( 'Panel %d', 'astra-builder' ), index + 1 ) )
+                )
+            ),
+            wp.element.createElement( 'div', { className: 'astra-builder-wrapper__panels' },
+                panels.map( ( panel, index ) =>
+                    wp.element.createElement( 'div', {
+                        key: panel.id,
+                        className: 'astra-builder-wrapper__panel',
+                        'data-panel-index': index,
+                    },
+                    wp.element.createElement( 'div', { className: 'astra-builder-wrapper__panel-label' }, panel.label || sprintf( __( 'Panel %d', 'astra-builder' ), index + 1 ) ),
+                    renderPanelContent( panel ) )
+                )
+            )
+        );
+    };
+
+    const createWrapperInspector = ( variant ) => ( props ) => {
+        if ( ! InspectorControls ) {
+            return null;
+        }
+
+        const { attributes, setAttributes } = props;
+        const showCarousel = 'carousel' === variant;
+
+        return wp.element.createElement( InspectorControls, null,
+            wp.element.createElement( PanelBody, { title: __( 'Wrapper behavior', 'astra-builder' ), initialOpen: false },
+                wp.element.createElement( TextControl, {
+                    label: __( 'Wrapper label', 'astra-builder' ),
+                    value: attributes.wrapperLabel || '',
+                    onChange: ( value ) => setAttributes( { wrapperLabel: value } ),
+                } ),
+                showCarousel ? wp.element.createElement( ToggleControl, {
+                    label: __( 'Enable autoplay', 'astra-builder' ),
+                    checked: !! attributes.autoplay,
+                    onChange: ( value ) => setAttributes( { autoplay: value } ),
+                } ) : null,
+                showCarousel ? wp.element.createElement( RangeControl, {
+                    label: __( 'Slide interval (seconds)', 'astra-builder' ),
+                    min: 2,
+                    max: 15,
+                    value: attributes.interval || 5,
+                    onChange: ( value ) => setAttributes( { interval: value } ),
+                } ) : null
+            )
+        );
+    };
+
+    const registerWrapperBlock = ( name, options ) => {
+        if ( ! registerBlockType ) {
+            return;
+        }
+
+        const settings = {
+            palette: {
+                title: options.title,
+                description: options.description,
+            },
+            block: {
+                title: options.title,
+                icon: options.icon || 'layout',
+                category: 'layout',
+                description: options.description,
+                supports: { html: false },
+                attributes: {
+                    panels: { type: 'array', default: [] },
+                    autoplay: { type: 'boolean', default: false },
+                    interval: { type: 'number', default: 5 },
+                    wrapperLabel: { type: 'string', default: '' },
+                    astraBinding: { type: 'object', default: {} },
+                },
+                edit: createWrapperEditComponent( options.variant ),
+                save: createWrapperSaveComponent( options.variant ),
+            },
+        };
+
+        AstraBlockRegistry.registerWrapperBlock( name, settings );
+        AstraBlockRegistry.registerInspectorControl( name, createWrapperInspector( options.variant ) );
+    };
+
+    registerWrapperBlock( 'astra-builder/tabs', {
+        title: __( 'Tabs wrapper', 'astra-builder' ),
+        description: __( 'Organize content into tabbed sections.', 'astra-builder' ),
+        variant: 'tabs',
+        icon: 'index-card',
+    } );
+
+    registerWrapperBlock( 'astra-builder/accordion', {
+        title: __( 'Accordion wrapper', 'astra-builder' ),
+        description: __( 'Toggle FAQs or dense information.', 'astra-builder' ),
+        variant: 'accordion',
+        icon: 'menu',
+    } );
+
+    registerWrapperBlock( 'astra-builder/carousel', {
+        title: __( 'Carousel wrapper', 'astra-builder' ),
+        description: __( 'Loop through testimonials or highlights.', 'astra-builder' ),
+        variant: 'carousel',
+        icon: 'images-alt2',
+    } );
+
+    AstraBlockRegistry.registerPreset( 'astra-hero-highlight', {
+        blockName: 'core/cover',
+        title: __( 'Hero highlight', 'astra-builder' ),
+        description: __( 'Full-bleed hero with strong call to action.', 'astra-builder' ),
+        attributes: {
+            dimRatio: 30,
+            overlayColor: '#0f172a',
+            contentPosition: 'center center',
+            minHeight: 520,
+        },
+        innerBlocks: [
+            {
+                name: 'core/heading',
+                attributes: { level: 1, content: __( 'Launch something beautiful', 'astra-builder' ) },
+            },
+            {
+                name: 'core/paragraph',
+                attributes: { content: __( 'Pair bold copy with immersive imagery to guide visitors toward action.', 'astra-builder' ) },
+            },
+            {
+                name: 'core/buttons',
+                innerBlocks: [
+                    { name: 'core/button', attributes: { text: __( 'Get started', 'astra-builder' ), url: '#' } },
+                ],
+            },
+        ],
+    } );
+
+    AstraBlockRegistry.registerPreset( 'astra-feature-grid', {
+        blockName: 'core/columns',
+        title: __( 'Feature grid', 'astra-builder' ),
+        description: __( 'Three-column layout for benefits or services.', 'astra-builder' ),
+        attributes: { columns: 3 },
+        innerBlocks: [
+            { name: 'core/column', innerBlocks: [ { name: 'core/heading', attributes: { level: 3, content: __( 'Speed', 'astra-builder' ) } }, { name: 'core/paragraph', attributes: { content: __( 'Lightning fast publishing.', 'astra-builder' ) } } ] },
+            { name: 'core/column', innerBlocks: [ { name: 'core/heading', attributes: { level: 3, content: __( 'Control', 'astra-builder' ) } }, { name: 'core/paragraph', attributes: { content: __( 'Pixel-perfect layouts.', 'astra-builder' ) } } ] },
+            { name: 'core/column', innerBlocks: [ { name: 'core/heading', attributes: { level: 3, content: __( 'Support', 'astra-builder' ) } }, { name: 'core/paragraph', attributes: { content: __( 'Guided onboarding and success.', 'astra-builder' ) } } ] },
+        ],
+    } );
+
+    AstraBlockRegistry.registerPreset( 'astra-story-carousel', {
+        blockName: 'core/group',
+        title: __( 'Story carousel', 'astra-builder' ),
+        description: __( 'Stacked quotes ready for the carousel wrapper.', 'astra-builder' ),
+        innerBlocks: [
+            { name: 'core/quote', attributes: { value: __( 'This builder unlocked our creativity.', 'astra-builder' ), citation: 'Alex, Founder' } },
+            { name: 'core/quote', attributes: { value: __( 'Building complex layouts now feels simple.', 'astra-builder' ), citation: 'Jamie, Designer' } },
+        ],
+    } );
+
+    const createFormField = ( type = 'text' ) => ( {
+        id: 'field-' + Math.random().toString( 36 ).slice( 2, 10 ),
+        label: '',
+        name: '',
+        type,
+        placeholder: '',
+        required: false,
+        options: '',
+        helperText: '',
+    } );
+
+    const createFormStep = ( index ) => ( {
+        id: 'step-' + Math.random().toString( 36 ).slice( 2, 10 ),
+        label: sprintf( __( 'Step %d', 'astra-builder' ), index ),
+        description: '',
+        fields: [ createFormField() ],
+    } );
+
+    const ensureSteps = ( steps ) => {
+        if ( Array.isArray( steps ) && steps.length ) {
+            return steps;
+        }
+        return [ createFormStep( 1 ) ];
+    };
+
+    const FORM_FIELD_TYPES = [
+        { label: __( 'Text', 'astra-builder' ), value: 'text' },
+        { label: __( 'Email', 'astra-builder' ), value: 'email' },
+        { label: __( 'Textarea', 'astra-builder' ), value: 'textarea' },
+        { label: __( 'Select', 'astra-builder' ), value: 'select' },
+        { label: __( 'Checkbox', 'astra-builder' ), value: 'checkbox' },
+    ];
+
+    const FormFieldEditor = ( { field, onChange, onRemove } ) => {
+        const optionsControl = 'select' === field.type ? wp.element.createElement( TextareaControl, {
+            label: __( 'Options (one per line)', 'astra-builder' ),
+            value: field.options || '',
+            onChange: ( value ) => onChange( Object.assign( {}, field, { options: value } ) ),
+        } ) : null;
+
+        return wp.element.createElement( Card, { className: 'astra-builder-form-field', key: field.id },
+            wp.element.createElement( CardHeader, null, field.label || __( 'Form field', 'astra-builder' ) ),
+            wp.element.createElement( CardBody, null,
+                wp.element.createElement( TextControl, {
+                    label: __( 'Label', 'astra-builder' ),
+                    value: field.label,
+                    onChange: ( value ) => onChange( Object.assign( {}, field, { label: value } ) ),
+                } ),
+                wp.element.createElement( TextControl, {
+                    label: __( 'Field name', 'astra-builder' ),
+                    value: field.name,
+                    onChange: ( value ) => onChange( Object.assign( {}, field, { name: value } ) ),
+                    help: __( 'Lowercase with no spaces. Used as the submission key.', 'astra-builder' ),
+                } ),
+                wp.element.createElement( SelectControl, {
+                    label: __( 'Field type', 'astra-builder' ),
+                    value: field.type,
+                    options: FORM_FIELD_TYPES,
+                    onChange: ( value ) => onChange( Object.assign( {}, field, { type: value } ) ),
+                } ),
+                wp.element.createElement( TextControl, {
+                    label: __( 'Placeholder', 'astra-builder' ),
+                    value: field.placeholder,
+                    onChange: ( value ) => onChange( Object.assign( {}, field, { placeholder: value } ) ),
+                } ),
+                optionsControl,
+                wp.element.createElement( ToggleControl, {
+                    label: __( 'Required', 'astra-builder' ),
+                    checked: !! field.required,
+                    onChange: ( value ) => onChange( Object.assign( {}, field, { required: value } ) ),
+                } ),
+                wp.element.createElement( TextareaControl, {
+                    label: __( 'Helper text', 'astra-builder' ),
+                    value: field.helperText,
+                    onChange: ( value ) => onChange( Object.assign( {}, field, { helperText: value } ) ),
+                } ),
+                wp.element.createElement( Button, {
+                    isDestructive: true,
+                    variant: 'secondary',
+                    onClick: () => onRemove( field.id ),
+                }, __( 'Remove field', 'astra-builder' ) )
+            )
+        );
+    };
+
+    const FormStepEditor = ( { step, index, onChange, onRemove, onAddField } ) => wp.element.createElement( Card, { className: 'astra-builder-form-step', key: step.id },
+        wp.element.createElement( CardHeader, null,
+            wp.element.createElement( 'strong', null, step.label || sprintf( __( 'Step %d', 'astra-builder' ), index + 1 ) ),
+            index > 0 ? wp.element.createElement( Button, { isDestructive: true, onClick: () => onRemove( step.id ) }, __( 'Remove step', 'astra-builder' ) ) : null
+        ),
+        wp.element.createElement( CardBody, null,
+            wp.element.createElement( TextControl, {
+                label: __( 'Step label', 'astra-builder' ),
+                value: step.label,
+                onChange: ( value ) => onChange( Object.assign( {}, step, { label: value } ) ),
+            } ),
+            wp.element.createElement( TextareaControl, {
+                label: __( 'Description', 'astra-builder' ),
+                value: step.description,
+                onChange: ( value ) => onChange( Object.assign( {}, step, { description: value } ) ),
+            } ),
+            ( step.fields || [] ).map( ( field ) =>
+                wp.element.createElement( FormFieldEditor, {
+                    key: field.id,
+                    field,
+                    onChange: ( nextField ) => {
+                        const nextFields = step.fields.map( ( existing ) => ( existing.id === nextField.id ? nextField : existing ) );
+                        onChange( Object.assign( {}, step, { fields: nextFields } ) );
+                    },
+                    onRemove: ( fieldId ) => {
+                        const nextFields = step.fields.filter( ( existing ) => existing.id !== fieldId );
+                        onChange( Object.assign( {}, step, { fields: nextFields } ) );
+                    },
+                } )
+            ),
+            wp.element.createElement( Button, { variant: 'secondary', onClick: () => onAddField( step.id ) }, __( 'Add field', 'astra-builder' ) )
+        )
+    );
+
+    const FormEdit = ( props ) => {
+        const { attributes, setAttributes } = props;
+        const steps = ensureSteps( attributes.steps || [] );
+        const blockProps = useBlockProps( { className: 'astra-builder-form-editor' } );
+
+        useEffect( () => {
+            if ( ! attributes.steps || ! attributes.steps.length ) {
+                setAttributes( { steps } );
+            }
+        }, [] );
+
+        const updateSteps = ( nextSteps ) => setAttributes( { steps: nextSteps } );
+
+        const updateStep = ( stepId, payload ) => {
+            const nextSteps = steps.map( ( step ) => ( step.id === stepId ? Object.assign( {}, step, payload ) : step ) );
+            updateSteps( nextSteps );
+        };
+
+        const removeStep = ( stepId ) => {
+            if ( steps.length <= 1 ) {
+                return;
+            }
+            updateSteps( steps.filter( ( step ) => step.id !== stepId ) );
+        };
+
+        const addStep = () => {
+            const nextStep = createFormStep( steps.length + 1 );
+            updateSteps( steps.concat( nextStep ) );
+        };
+
+        const addField = ( stepId ) => {
+            const nextSteps = steps.map( ( step ) => {
+                if ( step.id !== stepId ) {
+                    return step;
+                }
+                const nextField = createFormField();
+                const count = ( step.fields || [] ).length + 1;
+                nextField.label = sprintf( __( 'Field %d', 'astra-builder' ), count );
+                nextField.name = 'field_' + Math.random().toString( 36 ).slice( 2, 7 );
+                return Object.assign( {}, step, { fields: ( step.fields || [] ).concat( nextField ) } );
+            } );
+            updateSteps( nextSteps );
+        };
+
+        const preview = steps.map( ( step, index ) =>
+            wp.element.createElement( 'span', { key: step.id, className: index === 0 ? 'is-active' : '' }, step.label || sprintf( __( 'Step %d', 'astra-builder' ), index + 1 ) )
+        );
+
+        return wp.element.createElement( 'div', blockProps,
+            wp.element.createElement( 'div', { className: 'astra-builder-form-editor__meta' },
+                wp.element.createElement( TextControl, {
+                    label: __( 'Form ID', 'astra-builder' ),
+                    value: attributes.formId || '',
+                    onChange: ( value ) => setAttributes( { formId: value } ),
+                    help: __( 'Used to connect REST submissions with this block.', 'astra-builder' ),
+                } ),
+                wp.element.createElement( TextControl, {
+                    label: __( 'Submit button label', 'astra-builder' ),
+                    value: attributes.submitLabel || __( 'Submit', 'astra-builder' ),
+                    onChange: ( value ) => setAttributes( { submitLabel: value } ),
+                } )
+            ),
+            wp.element.createElement( 'div', { className: 'astra-builder-form-editor__preview' }, preview ),
+            steps.map( ( step, index ) =>
+                wp.element.createElement( FormStepEditor, {
+                    key: step.id,
+                    step,
+                    index,
+                    onChange: ( payload ) => updateStep( step.id, payload ),
+                    onRemove: removeStep,
+                    onAddField: addField,
+                } )
+            ),
+            wp.element.createElement( Button, { variant: 'secondary', onClick: addStep }, __( 'Add step', 'astra-builder' ) )
+        );
+    };
+
+    const renderFormField = ( field ) => {
+        const name = field.name || field.id;
+        const commonProps = {
+            name,
+            placeholder: field.placeholder || '',
+            'data-required-field': field.required ? 'true' : 'false',
+        };
+
+        const label = wp.element.createElement( 'label', { className: 'astra-builder-form__label', htmlFor: name }, field.label || name );
+        let control = null;
+
+        if ( 'textarea' === field.type ) {
+            control = wp.element.createElement( 'textarea', Object.assign( {}, commonProps, { id: name, required: field.required ? true : undefined } ) );
+        } else if ( 'select' === field.type ) {
+            const options = ( field.options || '' ).split( /\r?\n/ ).filter( Boolean );
+            control = wp.element.createElement( 'select', Object.assign( {}, commonProps, { id: name, required: field.required ? true : undefined } ),
+                options.map( ( option ) => wp.element.createElement( 'option', { key: option, value: option }, option ) )
+            );
+        } else if ( 'checkbox' === field.type ) {
+            control = wp.element.createElement( 'input', Object.assign( {}, commonProps, { id: name, type: 'checkbox', value: '1', required: field.required ? true : undefined } ) );
+        } else {
+            const inputType = 'email' === field.type ? 'email' : 'text';
+            control = wp.element.createElement( 'input', Object.assign( {}, commonProps, { id: name, type: inputType, required: field.required ? true : undefined } ) );
+        }
+
+        const helper = field.helperText ? wp.element.createElement( 'small', { className: 'astra-builder-form__help' }, field.helperText ) : null;
+
+        return wp.element.createElement( 'div', { className: 'astra-builder-form__field', key: field.id }, label, control, helper );
+    };
+
+    const FormSave = ( props ) => {
+        const { attributes } = props;
+        const steps = ensureSteps( attributes.steps || [] );
+        const honeypotName = ( attributes.spamProtection && attributes.spamProtection.honeypotField ) || defaultSpamSettings.honeypotField || 'astra_builder_field';
+        const successMessage = attributes.successMessage || __( 'Thanks! We received your submission.', 'astra-builder' );
+        const requiredFields = [];
+        steps.forEach( ( step ) => {
+            ( step.fields || [] ).forEach( ( field ) => {
+                if ( field.required && field.name ) {
+                    requiredFields.push( field.name );
+                }
+            } );
+        } );
+
+        const requirementsValue = JSON.stringify( requiredFields );
+        const formProps = useBlockPropsSave( {
+            className: 'astra-builder-form',
+            'data-form-id': attributes.formId || '',
+            'data-success-message': successMessage,
+            'data-stepper': steps.length > 1 ? 'true' : 'false',
+            'data-endpoint': `/wp-json/${ restNamespace }/form-submissions`,
+            'data-integration': attributes.integration || 'local',
+            'data-honeypot': honeypotName,
+        } );
+
+        const stepElements = steps.map( ( step, index ) => {
+            const controls = [];
+            if ( index > 0 ) {
+                controls.push( wp.element.createElement( 'button', { type: 'button', className: 'astra-builder-form__nav is-prev', 'data-astra-step-prev': 'true' }, __( 'Previous', 'astra-builder' ) ) );
+            }
+            if ( index < steps.length - 1 ) {
+                controls.push( wp.element.createElement( 'button', { type: 'button', className: 'astra-builder-form__nav is-next', 'data-astra-step-next': 'true' }, __( 'Next', 'astra-builder' ) ) );
+            }
+
+            return wp.element.createElement( 'fieldset', {
+                key: step.id,
+                className: 'astra-builder-form__step',
+                'data-astra-form-step': index,
+            },
+                wp.element.createElement( 'legend', null, step.label || sprintf( __( 'Step %d', 'astra-builder' ), index + 1 ) ),
+                step.description ? wp.element.createElement( 'p', { className: 'astra-builder-form__description' }, step.description ) : null,
+                ( step.fields || [] ).map( renderFormField ),
+                controls.length ? wp.element.createElement( 'div', { className: 'astra-builder-form__step-controls' }, controls ) : null
+            );
+        } );
+
+        return wp.element.createElement( 'form', formProps,
+            wp.element.createElement( 'input', { type: 'hidden', name: '_astra_form_id', value: attributes.formId || '' } ),
+            wp.element.createElement( 'input', { type: 'hidden', name: '_astra_timestamp', value: '' } ),
+            wp.element.createElement( 'input', { type: 'hidden', name: '_astra_requirements', value: requirementsValue } ),
+            wp.element.createElement( 'input', { type: 'text', className: 'astra-builder-form__honeypot', name: honeypotName, tabIndex: '-1', autoComplete: 'off', style: { position: 'absolute', left: '-999em' } } ),
+            wp.element.createElement( 'div', { className: 'astra-builder-form__steps-indicator' },
+                steps.map( ( step, index ) => wp.element.createElement( 'span', { key: step.id, className: index === 0 ? 'is-active' : '' }, step.label || index + 1 ) )
+            ),
+            stepElements,
+            wp.element.createElement( 'div', { className: 'astra-builder-form__status', 'aria-live': 'polite' } ),
+            wp.element.createElement( 'button', { type: 'submit', className: 'astra-builder-form__submit' }, attributes.submitLabel || __( 'Submit', 'astra-builder' ) )
+        );
+    };
+
+    if ( registerBlockType ) {
+        registerBlockType( 'astra-builder/form', {
+            title: __( 'Astra Form', 'astra-builder' ),
+            icon: 'feedback',
+            category: 'widgets',
+            description: __( 'Collect submissions with validation, spam protection, and REST persistence.', 'astra-builder' ),
+            supports: { html: false },
+            attributes: {
+                formId: { type: 'string', default: '' },
+                submitLabel: { type: 'string', default: __( 'Submit', 'astra-builder' ) },
+                successMessage: { type: 'string', default: __( 'Thanks! We received your submission.', 'astra-builder' ) },
+                integration: { type: 'string', default: 'local' },
+                spamProtection: { type: 'object', default: defaultSpamSettings },
+                steps: { type: 'array', default: [] },
+                astraBinding: { type: 'object', default: {} },
+            },
+            edit: FormEdit,
+            save: FormSave,
+        } );
+    }
+
+    const FormBehaviorInspector = ( props ) => {
+        if ( ! InspectorControls ) {
+            return null;
+        }
+
+        const { attributes, setAttributes } = props;
+        const spam = attributes.spamProtection || defaultSpamSettings;
+
+        return wp.element.createElement( InspectorControls, null,
+            wp.element.createElement( PanelBody, { title: __( 'Form behavior', 'astra-builder' ), initialOpen: false },
+                wp.element.createElement( TextControl, {
+                    label: __( 'Success message', 'astra-builder' ),
+                    value: attributes.successMessage || '',
+                    onChange: ( value ) => setAttributes( { successMessage: value } ),
+                } ),
+                wp.element.createElement( TextControl, {
+                    label: __( 'Honeypot field name', 'astra-builder' ),
+                    value: spam.honeypotField || defaultSpamSettings.honeypotField || 'astra_builder_field',
+                    onChange: ( value ) => setAttributes( { spamProtection: Object.assign( {}, spam, { honeypotField: value } ) } ),
+                } ),
+                wp.element.createElement( RangeControl, {
+                    label: __( 'Minimum seconds before submission', 'astra-builder' ),
+                    min: 0,
+                    max: 30,
+                    value: spam.minimumSeconds || defaultSpamSettings.minimumSeconds || 3,
+                    onChange: ( value ) => setAttributes( { spamProtection: Object.assign( {}, spam, { minimumSeconds: value } ) } ),
+                } ),
+                wp.element.createElement( SelectControl, {
+                    label: __( 'Integration', 'astra-builder' ),
+                    value: attributes.integration || 'local',
+                    options: [
+                        { label: __( 'Store in WordPress', 'astra-builder' ), value: 'local' },
+                        { label: __( 'Email notification', 'astra-builder' ), value: 'email' },
+                        { label: __( 'CRM / webhook', 'astra-builder' ), value: 'crm' },
+                    ],
+                    onChange: ( value ) => setAttributes( { integration: value } ),
+                } )
+            )
+        );
+    };
+
+    AstraBlockRegistry.registerInspectorControl( 'astra-builder/form', FormBehaviorInspector );
+
+    AstraBlockRegistry.getPresetBlueprints().forEach( ( blueprint ) => {
+        PALETTE_BLOCKS.push( blueprint );
+    } );
+
+    AstraBlockRegistry.getWrapperBlueprints().forEach( ( blueprint ) => {
+        PALETTE_BLOCKS.push( blueprint );
+    } );
+
+    PALETTE_BLOCKS.push( {
+        name: 'astra-builder/form',
+        title: __( 'Advanced form', 'astra-builder' ),
+        description: __( 'Validated multi-step forms.', 'astra-builder' ),
+    } );
 
     const getDefaultConditionList = ( key ) => {
         if ( pluginData.defaults && pluginData.defaults.conditions && Array.isArray( pluginData.defaults.conditions[ key ] ) ) {
@@ -294,8 +1091,6 @@
             )
         );
 
-    const { addFilter } = wp.hooks || {};
-
     const ensureResponsiveAttribute = ( settings = {} ) => {
         const nextSettings = Object.assign( {}, settings );
         nextSettings.attributes = nextSettings.attributes || {};
@@ -308,8 +1103,21 @@
         return nextSettings;
     };
 
+    const ensureBindingAttribute = ( settings = {} ) => {
+        const nextSettings = Object.assign( {}, settings );
+        nextSettings.attributes = nextSettings.attributes || {};
+        if ( ! nextSettings.attributes.astraBinding ) {
+            nextSettings.attributes.astraBinding = {
+                type: 'object',
+                default: {},
+            };
+        }
+        return nextSettings;
+    };
+
     if ( addFilter ) {
         addFilter( 'blocks.registerBlockType', 'astra-builder/responsive-attributes', ensureResponsiveAttribute );
+        addFilter( 'blocks.registerBlockType', 'astra-builder/data-binding-attributes', ensureBindingAttribute );
     }
 
     const RESPONSIVE_SECTIONS = [
