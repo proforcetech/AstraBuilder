@@ -189,6 +189,12 @@ class Astra_Builder {
                 'id'     => (int) $current_user->ID,
                 'name'   => $current_user->display_name,
                 'avatar' => get_avatar_url( $current_user->ID, array( 'size' => 64 ) ),
+                'capabilities' => array(
+                    'install_plugins'   => current_user_can( 'install_plugins' ),
+                    'manage_options'    => current_user_can( 'manage_options' ),
+                    'upload_files'      => current_user_can( 'upload_files' ),
+                    'edit_theme_options'=> current_user_can( 'edit_theme_options' ),
+                ),
             ),
             'collaboration' => array(
                 'role'             => $this->get_current_builder_role(),
@@ -202,6 +208,9 @@ class Astra_Builder {
             'backup'        => array(
                 'endpoint' => rest_url( 'astra-builder/v1/backup' ),
             ),
+            'marketplace'  => array(
+                'manifest' => $this->get_marketplace_manifest(),
+            ),
         );
 
         wp_localize_script( 'astra-builder-editor', 'AstraBuilderData', $editor_data );
@@ -214,6 +223,50 @@ class Astra_Builder {
         if ( $token_css ) {
             wp_add_inline_style( 'astra-builder-editor', $token_css );
         }
+    }
+
+    /**
+     * Load the marketplace manifest that powers the admin catalog.
+     *
+     * @return array
+     */
+    protected function get_marketplace_manifest() {
+        $manifest_path = dirname( __DIR__ ) . '/assets/marketplace-manifest.json';
+
+        if ( ! file_exists( $manifest_path ) ) {
+            return array(
+                'version'  => 1,
+                'packages' => array(),
+            );
+        }
+
+        $contents = file_get_contents( $manifest_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+
+        if ( ! $contents ) {
+            return array(
+                'version'  => 1,
+                'packages' => array(),
+            );
+        }
+
+        $decoded = json_decode( $contents, true );
+
+        if ( ! is_array( $decoded ) ) {
+            return array(
+                'version'  => 1,
+                'packages' => array(),
+            );
+        }
+
+        if ( empty( $decoded['packages'] ) || ! is_array( $decoded['packages'] ) ) {
+            $decoded['packages'] = array();
+        }
+
+        if ( empty( $decoded['version'] ) ) {
+            $decoded['version'] = 1;
+        }
+
+        return $decoded;
     }
 
     /**
