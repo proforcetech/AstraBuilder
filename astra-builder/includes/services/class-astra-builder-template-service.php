@@ -15,6 +15,10 @@ class Astra_Builder_Template_Service {
     const PREVIEW_TRANSIENT_PREFIX  = 'astra_builder_preview_';
     const PREVIEW_QUERY_VAR         = 'astra_builder_preview';
     const PREVIEW_TRANSIENT_EXPIRY  = 6; // Hours.
+    const META_ASSET_MANIFEST       = '_astra_builder_asset_manifest';
+    const META_RESOURCE_HINTS       = '_astra_builder_resource_hints';
+    const LCP_THRESHOLD             = 2500; // Milliseconds.
+    const CLS_THRESHOLD             = 0.1;
 
     /**
      * Token service dependency.
@@ -155,6 +159,50 @@ class Astra_Builder_Template_Service {
 
         register_post_meta( self::TEMPLATE_POST_TYPE, self::META_STYLE_OVERRIDES, $style_args );
         register_post_meta( self::COMPONENT_POST_TYPE, self::META_STYLE_OVERRIDES, $style_args );
+
+        $asset_args = array(
+            'type'              => 'object',
+            'single'            => true,
+            'show_in_rest'      => array(
+                'schema' => array(
+                    'type' => 'object',
+                ),
+            ),
+            'auth_callback'     => function() {
+                return current_user_can( 'edit_theme_options' );
+            },
+            'sanitize_callback' => array( $this, 'sanitize_asset_manifest' ),
+        );
+
+        register_post_meta( self::TEMPLATE_POST_TYPE, self::META_ASSET_MANIFEST, $asset_args );
+        register_post_meta( self::COMPONENT_POST_TYPE, self::META_ASSET_MANIFEST, $asset_args );
+
+        $hint_args = array(
+            'type'              => 'array',
+            'single'            => true,
+            'show_in_rest'      => array(
+                'schema' => array(
+                    'type'  => 'array',
+                    'items' => array(
+                        'type'       => 'object',
+                        'properties' => array(
+                            'rel'    => array( 'type' => 'string' ),
+                            'as'     => array( 'type' => 'string' ),
+                            'href'   => array( 'type' => 'string' ),
+                            'handle' => array( 'type' => 'string' ),
+                            'type'   => array( 'type' => 'string' ),
+                        ),
+                    ),
+                ),
+            ),
+            'auth_callback'     => function() {
+                return current_user_can( 'edit_theme_options' );
+            },
+            'sanitize_callback' => array( $this, 'sanitize_resource_hints' ),
+        );
+
+        register_post_meta( self::TEMPLATE_POST_TYPE, self::META_RESOURCE_HINTS, $hint_args );
+        register_post_meta( self::COMPONENT_POST_TYPE, self::META_RESOURCE_HINTS, $hint_args );
     }
 
     /**
@@ -192,6 +240,119 @@ class Astra_Builder_Template_Service {
         }
 
         return $sanitized;
+    }
+
+    /**
+     * Sanitize stored asset manifests.
+     *
+     * @param mixed $value Raw value.
+     *
+     * @return array
+     */
+    public function sanitize_asset_manifest( $value ) {
+        if ( ! is_array( $value ) ) {
+            return array(
+                'styles'  => array(),
+                'scripts' => array(),
+                'blocks'  => array(),
+            );
+        }
+
+        $clean = array(
+            'styles'  => array(),
+            'scripts' => array(),
+            'blocks'  => array(),
+        );
+
+        if ( ! empty( $value['styles'] ) && is_array( $value['styles'] ) ) {
+            foreach ( $value['styles'] as $handle ) {
+                if ( is_string( $handle ) ) {
+                    $clean['styles'][] = sanitize_key( $handle );
+                }
+            }
+        }
+
+        if ( ! empty( $value['scripts'] ) && is_array( $value['scripts'] ) ) {
+            foreach ( $value['scripts'] as $handle ) {
+                if ( is_string( $handle ) ) {
+                    $clean['scripts'][] = sanitize_key( $handle );
+                }
+            }
+        }
+
+        if ( ! empty( $value['blocks'] ) && is_array( $value['blocks'] ) ) {
+            foreach ( $value['blocks'] as $key => $details ) {
+                $clean_key = sanitize_key( $key );
+
+                if ( empty( $clean_key ) ) {
+                    continue;
+                }
+
+                $clean['blocks'][ $clean_key ] = array(
+                    'name'    => isset( $details['name'] ) ? sanitize_text_field( $details['name'] ) : '',
+                    'styles'  => array(),
+                    'scripts' => array(),
+                );
+
+                if ( ! empty( $details['styles'] ) && is_array( $details['styles'] ) ) {
+                    foreach ( $details['styles'] as $handle ) {
+                        if ( is_string( $handle ) ) {
+                            $clean['blocks'][ $clean_key ]['styles'][] = sanitize_key( $handle );
+                        }
+                    }
+                }
+
+                if ( ! empty( $details['scripts'] ) && is_array( $details['scripts'] ) ) {
+                    foreach ( $details['scripts'] as $handle ) {
+                        if ( is_string( $handle ) ) {
+                            $clean['blocks'][ $clean_key ]['scripts'][] = sanitize_key( $handle );
+                        }
+                    }
+                }
+            }
+        }
+
+        $clean['styles']  = array_values( array_unique( $clean['styles'] ) );
+        $clean['scripts'] = array_values( array_unique( $clean['scripts'] ) );
+
+        return $clean;
+    }
+
+    /**
+     * Sanitize resource hint definitions.
+     *
+     * @param mixed $value Raw value.
+     *
+     * @return array
+     */
+    public function sanitize_resource_hints( $value ) {
+        if ( ! is_array( $value ) ) {
+            return array();
+        }
+
+        $clean = array();
+
+        foreach ( $value as $hint ) {
+            if ( empty( $hint ) || ! is_array( $hint ) ) {
+                continue;
+            }
+
+            $href = isset( $hint['href'] ) ? esc_url_raw( $hint['href'] ) : '';
+
+            if ( empty( $href ) ) {
+                continue;
+            }
+
+            $clean[] = array(
+                'rel'    => isset( $hint['rel'] ) ? sanitize_key( $hint['rel'] ) : 'preload',
+                'as'     => isset( $hint['as'] ) ? sanitize_text_field( $hint['as'] ) : '',
+                'href'   => $href,
+                'handle' => isset( $hint['handle'] ) ? sanitize_key( $hint['handle'] ) : '',
+                'type'   => isset( $hint['type'] ) ? sanitize_text_field( $hint['type'] ) : '',
+            );
+        }
+
+        return $clean;
     }
 
     /**
@@ -283,10 +444,29 @@ class Astra_Builder_Template_Service {
             printf( '<style id="astra-builder-preview-css">%s</style>', wp_strip_all_tags( $snapshot['css'] ) );
         }
 
+        if ( ! empty( $snapshot['hints'] ) && is_array( $snapshot['hints'] ) ) {
+            foreach ( $snapshot['hints'] as $hint ) {
+                if ( empty( $hint['href'] ) ) {
+                    continue;
+                }
+
+                $rel = isset( $hint['rel'] ) ? $hint['rel'] : 'preload';
+                $as  = isset( $hint['as'] ) ? $hint['as'] : '';
+
+                printf(
+                    '<link rel="%1$s"%2$s href="%3$s" />',
+                    esc_attr( $rel ),
+                    $as ? ' as="' . esc_attr( $as ) . '"' : '',
+                    esc_url( $hint['href'] )
+                );
+            }
+        }
+
         echo '</head><body>';
         echo '<div class="astra-builder-preview">';
         echo wp_kses_post( $snapshot['html'] );
         echo '</div>';
+        printf( '<script>%s</script>', $this->get_preview_metrics_script() );
         echo '</body></html>';
         exit;
     }
@@ -312,6 +492,8 @@ class Astra_Builder_Template_Service {
 
         update_post_meta( $post_id, self::META_RENDERED_MARKUP, $compiled['html'] );
         update_post_meta( $post_id, self::META_CRITICAL_CSS, $compiled['css'] );
+        update_post_meta( $post_id, self::META_ASSET_MANIFEST, $compiled['assets'] );
+        update_post_meta( $post_id, self::META_RESOURCE_HINTS, $compiled['hints'] );
     }
 
     /**
@@ -325,11 +507,14 @@ class Astra_Builder_Template_Service {
      */
     protected function compose_template_from_content( $post, $content, $style_overrides = array() ) {
         $blocks = parse_blocks( $content );
+        $assets = $this->collect_block_assets( $blocks );
         $html   = '';
 
         foreach ( $blocks as $block ) {
             $html .= render_block( $block );
         }
+
+        $html = $this->apply_media_enhancements( $html );
 
         $supports = $this->get_theme_support_flags();
         $classes  = $this->get_wrapper_classes( $supports, $post->ID );
@@ -337,12 +522,41 @@ class Astra_Builder_Template_Service {
         $markup = sprintf( '<div class="%s">%s</div>', esc_attr( implode( ' ', $classes ) ), $html );
 
         $critical_css = $this->extract_critical_css( $content, $supports, $post->ID, $style_overrides );
+        $resource_hints = $this->build_resource_hints( $assets );
 
         return array(
             'html'     => $markup,
             'css'      => $critical_css,
             'supports' => $supports,
+            'assets'   => $assets,
+            'hints'    => $resource_hints,
         );
+    }
+
+    /**
+     * Apply optimizations to rendered markup.
+     *
+     * @param string $html Raw markup string.
+     *
+     * @return string
+     */
+    protected function apply_media_enhancements( $html ) {
+        if ( empty( $html ) ) {
+            return $html;
+        }
+
+        $lazy_patterns = array(
+            '/<img\b(?![^>]*\bloading=)/i'   => '<img loading="lazy"',
+            '/<iframe\b(?![^>]*\bloading=)/i' => '<iframe loading="lazy"',
+        );
+
+        foreach ( $lazy_patterns as $pattern => $replacement ) {
+            $html = preg_replace( $pattern, $replacement, $html );
+        }
+
+        $html = preg_replace( '/<img\b(?![^>]*\bdecoding=)/i', '<img decoding="async"', $html );
+
+        return $html;
     }
 
     /**
@@ -470,6 +684,206 @@ class Astra_Builder_Template_Service {
         }
 
         return $rules;
+    }
+
+    /**
+     * Gather block asset handles for the provided content.
+     *
+     * @param array $blocks Parsed blocks.
+     *
+     * @return array
+     */
+    protected function collect_block_assets( $blocks ) {
+        $manifest = array(
+            'styles'  => array(),
+            'scripts' => array(),
+            'blocks'  => array(),
+        );
+
+        if ( empty( $blocks ) ) {
+            return $manifest;
+        }
+
+        foreach ( $blocks as $block ) {
+            $block_name = isset( $block['blockName'] ) ? $block['blockName'] : '';
+            $handles    = $this->get_block_asset_handles( $block_name );
+
+            if ( ! empty( $handles['styles'] ) ) {
+                $manifest['styles'] = array_merge( $manifest['styles'], $handles['styles'] );
+            }
+
+            if ( ! empty( $handles['scripts'] ) ) {
+                $manifest['scripts'] = array_merge( $manifest['scripts'], $handles['scripts'] );
+            }
+
+            if ( ! empty( $block_name ) ) {
+                $block_key = sanitize_key( str_replace( '/', '-', $block_name ) );
+
+                if ( ! isset( $manifest['blocks'][ $block_key ] ) ) {
+                    $manifest['blocks'][ $block_key ] = array(
+                        'name'    => $block_name,
+                        'styles'  => array(),
+                        'scripts' => array(),
+                    );
+                }
+
+                $manifest['blocks'][ $block_key ]['styles']  = array_values( array_unique( array_merge( $manifest['blocks'][ $block_key ]['styles'], $handles['styles'] ) ) );
+                $manifest['blocks'][ $block_key ]['scripts'] = array_values( array_unique( array_merge( $manifest['blocks'][ $block_key ]['scripts'], $handles['scripts'] ) ) );
+            }
+
+            if ( ! empty( $block['innerBlocks'] ) ) {
+                $child_manifest = $this->collect_block_assets( $block['innerBlocks'] );
+                $manifest['styles']  = array_merge( $manifest['styles'], $child_manifest['styles'] );
+                $manifest['scripts'] = array_merge( $manifest['scripts'], $child_manifest['scripts'] );
+                $manifest['blocks']  = array_merge( $manifest['blocks'], $child_manifest['blocks'] );
+            }
+        }
+
+        $manifest['styles']  = array_values( array_unique( $manifest['styles'] ) );
+        $manifest['scripts'] = array_values( array_unique( $manifest['scripts'] ) );
+
+        return $manifest;
+    }
+
+    /**
+     * Fetch asset handles for a registered block.
+     *
+     * @param string $block_name Block name.
+     *
+     * @return array
+     */
+    protected function get_block_asset_handles( $block_name ) {
+        if ( empty( $block_name ) || ! class_exists( 'WP_Block_Type_Registry' ) ) {
+            return array(
+                'styles'  => array(),
+                'scripts' => array(),
+            );
+        }
+
+        $registry = WP_Block_Type_Registry::get_instance();
+
+        if ( ! $registry || ! $registry->is_registered( $block_name ) ) {
+            return array(
+                'styles'  => array(),
+                'scripts' => array(),
+            );
+        }
+
+        $type = $registry->get_registered( $block_name );
+
+        return array(
+            'styles'  => array_values( array_unique( array_merge(
+                $this->normalize_asset_handles( isset( $type->style ) ? $type->style : array() ),
+                $this->normalize_asset_handles( isset( $type->view_style ) ? $type->view_style : array() )
+            ) ) ),
+            'scripts' => array_values( array_unique( array_merge(
+                $this->normalize_asset_handles( isset( $type->script ) ? $type->script : array() ),
+                $this->normalize_asset_handles( isset( $type->view_script ) ? $type->view_script : array() )
+            ) ) ),
+        );
+    }
+
+    /**
+     * Normalize asset handles into sanitized lists.
+     *
+     * @param mixed $handles Handles.
+     *
+     * @return array
+     */
+    protected function normalize_asset_handles( $handles ) {
+        $list = array();
+
+        if ( empty( $handles ) ) {
+            return $list;
+        }
+
+        foreach ( (array) $handles as $handle ) {
+            if ( is_string( $handle ) && ! empty( $handle ) ) {
+                $list[] = sanitize_key( $handle );
+            }
+        }
+
+        return $list;
+    }
+
+    /**
+     * Build preload/prefetch metadata for required assets.
+     *
+     * @param array $assets Asset manifest.
+     *
+     * @return array
+     */
+    protected function build_resource_hints( $assets ) {
+        $hints  = array();
+        $styles = isset( $assets['styles'] ) ? (array) $assets['styles'] : array();
+        $scripts = isset( $assets['scripts'] ) ? (array) $assets['scripts'] : array();
+
+        foreach ( $styles as $handle ) {
+            $href = $this->resolve_asset_src( $handle, 'style' );
+            if ( $href ) {
+                $hints[] = array(
+                    'rel'    => 'preload',
+                    'as'     => 'style',
+                    'href'   => $href,
+                    'handle' => $handle,
+                    'type'   => 'style',
+                );
+            }
+        }
+
+        foreach ( $scripts as $handle ) {
+            $href = $this->resolve_asset_src( $handle, 'script' );
+            if ( $href ) {
+                $hints[] = array(
+                    'rel'    => 'preload',
+                    'as'     => 'script',
+                    'href'   => $href,
+                    'handle' => $handle,
+                    'type'   => 'script',
+                );
+            }
+        }
+
+        return $hints;
+    }
+
+    /**
+     * Resolve the absolute URL for an asset handle.
+     *
+     * @param string $handle Handle.
+     * @param string $type   Asset type.
+     *
+     * @return string
+     */
+    protected function resolve_asset_src( $handle, $type = 'style' ) {
+        if ( empty( $handle ) ) {
+            return '';
+        }
+
+        $registry = 'style' === $type ? wp_styles() : wp_scripts();
+
+        if ( ! $registry || empty( $registry->registered[ $handle ] ) ) {
+            return '';
+        }
+
+        $item = $registry->registered[ $handle ];
+        $src  = isset( $item->src ) ? $item->src : '';
+
+        if ( empty( $src ) ) {
+            return '';
+        }
+
+        if ( 0 === strpos( $src, 'http://' ) || 0 === strpos( $src, 'https://' ) || 0 === strpos( $src, '//' ) || 0 === strpos( $src, '/' ) ) {
+            return $src;
+        }
+
+        $base = isset( $registry->base_url ) ? trailingslashit( $registry->base_url ) : '';
+
+        if ( empty( $base ) ) {
+            return $src;
+        }
+
+        return $base . ltrim( $src, '/' );
     }
 
     /**
@@ -609,9 +1023,37 @@ class Astra_Builder_Template_Service {
      */
     public function get_compiled_template( $post_id ) {
         return array(
-            'html' => get_post_meta( $post_id, self::META_RENDERED_MARKUP, true ),
-            'css'  => get_post_meta( $post_id, self::META_CRITICAL_CSS, true ),
+            'html'   => get_post_meta( $post_id, self::META_RENDERED_MARKUP, true ),
+            'css'    => get_post_meta( $post_id, self::META_CRITICAL_CSS, true ),
+            'assets' => $this->get_asset_manifest( $post_id ),
+            'hints'  => $this->get_resource_hints( $post_id ),
         );
+    }
+
+    /**
+     * Retrieve stored asset manifest for a template.
+     *
+     * @param int $post_id Post ID.
+     *
+     * @return array
+     */
+    public function get_asset_manifest( $post_id ) {
+        $raw = get_post_meta( $post_id, self::META_ASSET_MANIFEST, true );
+
+        return $this->sanitize_asset_manifest( $raw );
+    }
+
+    /**
+     * Retrieve stored resource hints for a template.
+     *
+     * @param int $post_id Post ID.
+     *
+     * @return array
+     */
+    public function get_resource_hints( $post_id ) {
+        $raw = get_post_meta( $post_id, self::META_RESOURCE_HINTS, true );
+
+        return $this->sanitize_resource_hints( $raw );
     }
 
     /**
@@ -660,6 +1102,8 @@ class Astra_Builder_Template_Service {
             'markup'     => self::META_RENDERED_MARKUP,
             'css'        => self::META_CRITICAL_CSS,
             'styles'     => self::META_STYLE_OVERRIDES,
+            'assets'     => self::META_ASSET_MANIFEST,
+            'hints'      => self::META_RESOURCE_HINTS,
         );
     }
 
@@ -691,6 +1135,8 @@ class Astra_Builder_Template_Service {
             'css'         => $compiled['css'],
             'supports'    => $compiled['supports'],
             'styles'      => $style_overrides,
+            'assets'      => $compiled['assets'],
+            'hints'       => $compiled['hints'],
         );
 
         $snapshot['preview_url'] = $this->build_preview_url( $token );
@@ -732,6 +1178,33 @@ class Astra_Builder_Template_Service {
      */
     protected function build_preview_url( $token ) {
         return add_query_arg( array( self::PREVIEW_QUERY_VAR => $token ), home_url( '/' ) );
+    }
+
+    /**
+     * Provide the inline script that records preview performance metrics.
+     *
+     * @return string
+     */
+    protected function get_preview_metrics_script() {
+        $thresholds = wp_json_encode(
+            array(
+                'lcpTarget' => self::LCP_THRESHOLD,
+                'clsTarget' => self::CLS_THRESHOLD,
+            )
+        );
+
+        if ( ! $thresholds ) {
+            $thresholds = '{}';
+        }
+
+        $script  = "(function(){if(!('PerformanceObserver' in window)){return;}var thresholds=" . $thresholds . ';';
+        $script .= "var metrics={lcp:null,cls:0,lcpTarget:thresholds.lcpTarget||0,clsTarget:thresholds.clsTarget||0};";
+        $script .= "var send=function(){if(!window.opener||!window.opener.postMessage){return;}try{window.opener.postMessage({source:'astra-builder-preview-metrics',payload:metrics},window.location.origin);}catch(e){}};";
+        $script .= "try{var lcpObserver=new PerformanceObserver(function(list){var entries=list.getEntries();if(!entries.length){return;}var last=entries[entries.length-1];metrics.lcp=(last.renderTime||last.loadTime||last.startTime||0);send();});lcpObserver.observe({type:'largest-contentful-paint',buffered:true});}catch(e){}";
+        $script .= "try{var clsValue=0;var clsObserver=new PerformanceObserver(function(list){list.getEntries().forEach(function(entry){if(!entry.hadRecentInput){clsValue+=entry.value;}});metrics.cls=clsValue;send();});clsObserver.observe({type:'layout-shift',buffered:true});}catch(e){}";
+        $script .= "window.addEventListener('beforeunload',function(){send();});})();";
+
+        return $script;
     }
 
     /**

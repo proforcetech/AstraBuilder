@@ -150,6 +150,10 @@ class Astra_Builder {
             'restNamespace' => 'astra-builder/v1',
             'preview'       => array(
                 'queryVar' => Astra_Builder_Template_Service::PREVIEW_QUERY_VAR,
+                'metrics'  => array(
+                    'lcpTarget' => Astra_Builder_Template_Service::LCP_THRESHOLD,
+                    'clsTarget' => Astra_Builder_Template_Service::CLS_THRESHOLD,
+                ),
             ),
             'binding'       => $this->services['binding']->get_editor_config(),
             'forms'         => $this->services['forms']->get_editor_config(),
