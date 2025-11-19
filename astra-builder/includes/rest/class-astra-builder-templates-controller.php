@@ -179,7 +179,7 @@ class Astra_Builder_REST_Templates_Controller extends Astra_Builder_REST_Control
      *
      * @return WP_REST_Response
      */
-    public function get_item( WP_REST_Request $request ) {
+    public function get_item( $request ) {
         $post = $this->templates->get_post( $request['id'] );
 
         if ( ! $post ) {
@@ -196,7 +196,7 @@ class Astra_Builder_REST_Templates_Controller extends Astra_Builder_REST_Control
      *
      * @return WP_REST_Response|WP_Error
      */
-    public function create_item( WP_REST_Request $request ) {
+    public function create_item( $request ) {
         $params = $this->prepare_item_for_database( $request );
         $params = apply_filters( 'astra_builder_template_pre_save', $params, $request, false );
         do_action( 'astra_builder_before_template_save', $params, $request, false );
@@ -219,7 +219,7 @@ class Astra_Builder_REST_Templates_Controller extends Astra_Builder_REST_Control
      *
      * @return WP_REST_Response|WP_Error
      */
-    public function update_item( WP_REST_Request $request ) {
+    public function update_item( $request ) {
         $post = $this->templates->get_post( $request['id'] );
 
         if ( ! $post ) {
@@ -252,7 +252,7 @@ class Astra_Builder_REST_Templates_Controller extends Astra_Builder_REST_Control
      *
      * @return WP_REST_Response|WP_Error
      */
-    public function delete_item( WP_REST_Request $request ) {
+    public function delete_item( $request ) {
         $post = $this->templates->get_post( $request['id'] );
 
         if ( ! $post ) {
