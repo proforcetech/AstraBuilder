@@ -198,6 +198,8 @@ class Astra_Builder_REST_Templates_Controller extends Astra_Builder_REST_Control
      */
     public function create_item( WP_REST_Request $request ) {
         $params = $this->prepare_item_for_database( $request );
+        $params = apply_filters( 'astra_builder_template_pre_save', $params, $request, false );
+        do_action( 'astra_builder_before_template_save', $params, $request, false );
         $id     = wp_insert_post( $params, true );
 
         if ( is_wp_error( $id ) ) {
@@ -205,6 +207,7 @@ class Astra_Builder_REST_Templates_Controller extends Astra_Builder_REST_Control
         }
 
         $post = $this->templates->get_post( $id );
+        do_action( 'astra_builder_after_template_save', $post, $request, false );
 
         return rest_ensure_response( $this->prepare_item_for_response( $post, $request ) );
     }
@@ -226,6 +229,8 @@ class Astra_Builder_REST_Templates_Controller extends Astra_Builder_REST_Control
         $params           = $this->prepare_item_for_database( $request );
         $params['ID']     = $post->ID;
         $params['status'] = $post->post_status;
+        $params           = apply_filters( 'astra_builder_template_pre_save', $params, $request, true );
+        do_action( 'astra_builder_before_template_save', $params, $request, true );
 
         $updated = wp_update_post( $params, true );
 
@@ -233,7 +238,11 @@ class Astra_Builder_REST_Templates_Controller extends Astra_Builder_REST_Control
             return $updated;
         }
 
-        return rest_ensure_response( $this->prepare_item_for_response( get_post( $updated ), $request ) );
+        $updated_post = get_post( $updated );
+        $response     = $this->prepare_item_for_response( $updated_post, $request );
+        do_action( 'astra_builder_after_template_save', $updated_post, $request, true );
+
+        return rest_ensure_response( $response );
     }
 
     /**

@@ -436,7 +436,7 @@ class Astra_Builder_Template_Service {
      */
     public function convert_markup_to_layout( $markup ) {
         $markup = (string) $markup;
-        $blocks = parse_blocks( $markup );
+        $blocks = $this->apply_block_migrations( parse_blocks( $markup ) );
 
         return array(
             'layout' => $this->prepare_blocks_for_canvas( $blocks ),
@@ -999,7 +999,7 @@ class Astra_Builder_Template_Service {
      * @return array
      */
     protected function compose_template_from_content( $post, $content, $style_overrides = array() ) {
-        $blocks = parse_blocks( $content );
+        $blocks = $this->apply_block_migrations( parse_blocks( $content ) );
         $assets = $this->collect_block_assets( $blocks );
         $html   = '';
 
@@ -1017,13 +1017,20 @@ class Astra_Builder_Template_Service {
         $critical_css = $this->extract_critical_css( $content, $supports, $post->ID, $style_overrides );
         $resource_hints = $this->build_resource_hints( $assets );
 
-        return array(
+        $markup        = apply_filters( 'astra_builder_rendered_markup', $markup, $post );
+        $critical_css  = apply_filters( 'astra_builder_rendered_css', $critical_css, $post );
+        $assets        = apply_filters( 'astra_builder_rendered_assets', $assets, $post );
+        $resource_hints = apply_filters( 'astra_builder_rendered_hints', $resource_hints, $post );
+
+        $compiled = array(
             'html'     => $markup,
             'css'      => $critical_css,
             'supports' => $supports,
             'assets'   => $assets,
             'hints'    => $resource_hints,
         );
+
+        return apply_filters( 'astra_builder_compiled_template', $compiled, $post );
     }
 
     /**
@@ -1118,7 +1125,7 @@ class Astra_Builder_Template_Service {
             $css_chunks[] = wp_get_global_styles_custom_css();
         }
 
-        $blocks = parse_blocks( $content );
+        $blocks = $this->apply_block_migrations( parse_blocks( $content ) );
         $rules  = $this->collect_inline_style_rules( $blocks, $post_id );
 
         if ( ! empty( $rules ) ) {
@@ -1177,6 +1184,59 @@ class Astra_Builder_Template_Service {
         }
 
         return $rules;
+    }
+
+    /**
+     * Apply registered block migrations to parsed block trees.
+     *
+     * @param array $blocks Parsed blocks.
+     *
+     * @return array
+     */
+    protected function apply_block_migrations( $blocks ) {
+        if ( empty( $blocks ) || ! is_array( $blocks ) ) {
+            return array();
+        }
+
+        $migrations = apply_filters( 'astra_builder_block_migrations', array() );
+
+        if ( empty( $migrations ) || ! is_array( $migrations ) ) {
+            return $blocks;
+        }
+
+        $callbacks = array();
+
+        foreach ( $migrations as $migration ) {
+            if ( is_callable( $migration ) ) {
+                $callbacks[] = $migration;
+            }
+        }
+
+        if ( empty( $callbacks ) ) {
+            return $blocks;
+        }
+
+        $transform = function( $block ) use ( &$transform, $callbacks ) {
+            if ( ! is_array( $block ) ) {
+                return $block;
+            }
+
+            foreach ( $callbacks as $callback ) {
+                $result = call_user_func( $callback, $block );
+
+                if ( is_array( $result ) ) {
+                    $block = array_merge( $block, $result );
+                }
+            }
+
+            if ( ! empty( $block['innerBlocks'] ) && is_array( $block['innerBlocks'] ) ) {
+                $block['innerBlocks'] = array_map( $transform, $block['innerBlocks'] );
+            }
+
+            return $block;
+        };
+
+        return array_map( $transform, $blocks );
     }
 
     /**

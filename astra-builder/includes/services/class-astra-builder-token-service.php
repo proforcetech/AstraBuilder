@@ -157,11 +157,18 @@ class Astra_Builder_Token_Service {
         $sanitized = $this->sanitize_tokens( $tokens );
         $merged    = $this->merge_tokens( $this->get_default_tokens(), $sanitized );
         $previous  = $this->get_tokens();
-        $merged    = apply_filters( 'astra_builder_tokens_pre_update', $merged, $previous );
-        $updated   = update_option( self::TOKENS_OPTION, $merged );
+        $merged   = apply_filters( 'astra_builder_tokens_pre_update', $merged, $previous );
+        $changed  = $merged !== $previous;
+
+        if ( ! $changed ) {
+            return true;
+        }
+
+        $updated = update_option( self::TOKENS_OPTION, $merged );
 
         if ( $updated ) {
             $this->synchronize_theme_json( $merged );
+            do_action( 'astra_builder_tokens_changed', $merged, $previous );
         }
 
         return $updated;

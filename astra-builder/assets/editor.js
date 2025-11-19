@@ -18,6 +18,7 @@
         ToggleControl,
         RangeControl,
         Spinner,
+        Modal,
     } = wp.components;
     const { PluginSidebarMoreMenuItem, PluginSidebar } = wp.editPost || {};
     const blockEditor = wp.blockEditor || wp.editor || {};
@@ -29,10 +30,60 @@
     const { registerBlockType, createBlock, getBlockType } = wp.blocks;
     const { useDispatch, useSelect } = wp.data;
     const { useViewportMatch } = wp.compose;
-    const { addFilter } = wp.hooks || {};
+    const {
+        addFilter,
+        applyFilters,
+        doAction,
+        addAction,
+        removeAction,
+        removeFilter,
+    } = wp.hooks || {};
     const apiFetch = wp.apiFetch ? wp.apiFetch : null;
 
     const pluginData = window.AstraBuilderData || {};
+    const ASTRA_BUILDER_EVENTS = {
+        BEFORE_SAVE: 'astra_builder.beforeSave',
+        AFTER_SAVE: 'astra_builder.afterSave',
+        TOKEN_CHANGE: 'astra_builder.tokenChange',
+    };
+    const builderGlobal = window.AstraBuilder = window.AstraBuilder || {};
+    const localBlockMigrations = [];
+    const registerBlockMigration = ( migration ) => {
+        if ( typeof migration === 'function' ) {
+            localBlockMigrations.push( migration );
+        }
+    };
+    const builderHooks = {
+        events: ASTRA_BUILDER_EVENTS,
+        addAction: ( hookName, namespace, callback, priority = 10 ) => {
+            if ( addAction && hookName && namespace && typeof callback === 'function' ) {
+                addAction( hookName, namespace, callback, priority );
+            }
+        },
+        removeAction: ( hookName, namespace ) => {
+            if ( removeAction && hookName && namespace ) {
+                removeAction( hookName, namespace );
+            }
+        },
+        addFilter: ( hookName, namespace, callback, priority = 10 ) => {
+            if ( addFilter && hookName && namespace && typeof callback === 'function' ) {
+                addFilter( hookName, namespace, callback, priority );
+            }
+        },
+        removeFilter: ( hookName, namespace ) => {
+            if ( removeFilter && hookName && namespace ) {
+                removeFilter( hookName, namespace );
+            }
+        },
+        doAction: ( hookName, ...args ) => {
+            if ( doAction && hookName ) {
+                doAction( hookName, ...args );
+            }
+        },
+    };
+    builderGlobal.hooks = builderHooks;
+    builderGlobal.events = ASTRA_BUILDER_EVENTS;
+    builderGlobal.registerBlockMigration = registerBlockMigration;
     const metaKeys = pluginData.metaKeys || {};
     const restNamespace = pluginData.restNamespace || 'astra-builder/v1';
     const conditionOptions = pluginData.conditions || {};
@@ -467,6 +518,60 @@
         } );
     };
 
+    const getRegisteredBlockMigrations = () => {
+        const base = localBlockMigrations.slice();
+        if ( applyFilters ) {
+            const filtered = applyFilters( 'astra_builder.blockMigrations', base );
+            if ( Array.isArray( filtered ) ) {
+                return filtered.filter( ( migration ) => typeof migration === 'function' );
+            }
+        }
+        return base.filter( ( migration ) => typeof migration === 'function' );
+    };
+
+    const runBlockMigrationPipeline = ( block, migrations ) => {
+        if ( ! block || ! migrations.length ) {
+            return block;
+        }
+
+        let next = cloneDeep( block );
+
+        migrations.forEach( ( migration ) => {
+            try {
+                const result = migration( cloneDeep( next ) ) || null;
+                if ( result && typeof result === 'object' ) {
+                    next = Object.assign( {}, next, result );
+                }
+            } catch ( error ) {
+                if ( window.console && window.console.error ) {
+                    window.console.error( 'Astra Builder block migration failed', error );
+                }
+            }
+        } );
+
+        if ( Array.isArray( next.innerBlocks ) ) {
+            next.innerBlocks = next.innerBlocks.map( ( innerBlock ) => runBlockMigrationPipeline( innerBlock, migrations ) );
+        }
+
+        return next;
+    };
+
+    const migrateBlockList = ( blocks ) => {
+        const migrations = getRegisteredBlockMigrations();
+        if ( ! migrations.length || ! Array.isArray( blocks ) ) {
+            return blocks;
+        }
+        return blocks.map( ( block ) => runBlockMigrationPipeline( block, migrations ) );
+    };
+
+    const migrateSingleBlock = ( block ) => {
+        const migrations = getRegisteredBlockMigrations();
+        if ( ! migrations.length ) {
+            return block;
+        }
+        return runBlockMigrationPipeline( block, migrations );
+    };
+
     const getReadableBlockLabel = ( block ) => {
         if ( ! block || ! block.name ) {
             return __( 'Block', 'astra-builder' );
@@ -648,6 +753,10 @@
             getWrapperBlueprints,
         };
     } )();
+
+    builderGlobal.registerPreset = AstraBlockRegistry.registerPreset;
+    builderGlobal.registerWrapperBlock = AstraBlockRegistry.registerWrapperBlock;
+    builderGlobal.registerInspectorControl = AstraBlockRegistry.registerInspectorControl;
 
     const bindingSources = bindingConfig.sources || {};
     const bindingSourceOptions = Object.keys( bindingSources ).map( ( key ) => ( {
@@ -1341,6 +1450,67 @@
         PALETTE_BLOCKS.push( blueprint );
     } );
 
+    const ensureStringArray = ( value ) => ( Array.isArray( value ) ? value.map( ( item ) => ( 'string' === typeof item ? item.trim() : String( item || '' ).trim() ) ).filter( Boolean ) : [] );
+    const sanitizePackageSlug = ( slug ) => String( slug || '' ).toLowerCase().replace( /[^a-z0-9/.-]+/g, '-' ).replace( /-{2,}/g, '-' ).replace( /^-+|-+$/g, '' );
+    const normalizePreview = ( preview ) => {
+        if ( ! preview || 'object' !== typeof preview || ! preview.src ) {
+            return null;
+        }
+        return {
+            type: preview.type || 'image',
+            src: preview.src,
+            caption: preview.caption || '',
+        };
+    };
+    const normalizeMarketplaceManifest = ( manifest ) => {
+        const errors = [];
+        const normalized = [];
+        const seenSlugs = new Set();
+        if ( ! manifest || 'object' !== typeof manifest ) {
+            errors.push( __( 'Marketplace manifest is missing or invalid.', 'astra-builder' ) );
+            return { errors, packages: normalized };
+        }
+        const list = Array.isArray( manifest.packages ) ? manifest.packages : [];
+        list.forEach( ( pkg, index ) => {
+            const slug = sanitizePackageSlug( pkg.slug );
+            if ( ! slug ) {
+                errors.push( sprintf( __( 'Package at index %d is missing a valid slug.', 'astra-builder' ), index ) );
+                return;
+            }
+            if ( seenSlugs.has( slug ) ) {
+                errors.push( sprintf( __( 'Duplicate package slug detected: %s', 'astra-builder' ), slug ) );
+                return;
+            }
+            seenSlugs.add( slug );
+            const title = pkg.title ? String( pkg.title ).trim() : '';
+            if ( ! title ) {
+                errors.push( sprintf( __( 'Package %s is missing a title.', 'astra-builder' ), slug ) );
+                return;
+            }
+            const requires = pkg.requires && 'object' === typeof pkg.requires ? pkg.requires : {};
+            normalized.push( {
+                slug,
+                title,
+                description: pkg.description ? String( pkg.description ) : '',
+                version: pkg.version ? String( pkg.version ) : '1.0.0',
+                vendor: pkg.vendor ? String( pkg.vendor ) : '',
+                type: pkg.type ? String( pkg.type ) : 'block',
+                preview: normalizePreview( pkg.preview ),
+                requires: {
+                    capabilities: ensureStringArray( requires.capabilities ),
+                    packages: ensureStringArray( requires.packages ),
+                    tokens: ensureStringArray( requires.tokens ),
+                },
+                tags: ensureStringArray( pkg.tags ),
+            } );
+        } );
+        return { errors, packages: normalized };
+    };
+
+    const rawMarketplaceManifest = pluginData.marketplace && pluginData.marketplace.manifest ? pluginData.marketplace.manifest : { version: 1, packages: [] };
+    const filteredMarketplaceManifest = applyFilters ? applyFilters( 'astra_builder.marketplace_manifest', rawMarketplaceManifest ) : rawMarketplaceManifest;
+    const MARKETPLACE_MANIFEST = normalizeMarketplaceManifest( filteredMarketplaceManifest );
+
     PALETTE_BLOCKS.push( {
         name: 'astra-builder/form',
         title: __( 'Advanced form', 'astra-builder' ),
@@ -1526,7 +1696,18 @@
         }, [ restNamespace ] );
 
         const updateToken = useCallback( ( path, value ) => {
-            setTokens( ( current ) => setPathValue( current || {}, path, value ) );
+            setTokens( ( current ) => {
+                const nextTokens = setPathValue( current || {}, path, value );
+                if ( doAction ) {
+                    doAction( ASTRA_BUILDER_EVENTS.TOKEN_CHANGE, {
+                        path,
+                        value,
+                        nextTokens,
+                        previousTokens: current || {},
+                    } );
+                }
+                return nextTokens;
+            } );
             setHasChanges( true );
         }, [] );
 
@@ -2049,6 +2230,93 @@
             )
         );
 
+    const MarketplacePanel = () => {
+        const [ previewPackage, setPreviewPackage ] = useState( null );
+        const [ selection, setSelection ] = useState( [] );
+        const userCapabilities = ( currentUser && currentUser.capabilities ) || {};
+        const packages = MARKETPLACE_MANIFEST.packages;
+        const packageMap = useMemo( () => new Map( packages.map( ( pkg ) => [ pkg.slug, pkg ] ) ), [ packages ] );
+
+        const resolveDependencies = useCallback( ( slug, nextSet, visited = new Set() ) => {
+            if ( visited.has( slug ) ) {
+                return;
+            }
+            visited.add( slug );
+            const pkg = packageMap.get( slug );
+            if ( ! pkg || ! Array.isArray( pkg.requires.packages ) ) {
+                return;
+            }
+            pkg.requires.packages.forEach( ( depSlug ) => {
+                if ( packageMap.has( depSlug ) ) {
+                    nextSet.add( depSlug );
+                    resolveDependencies( depSlug, nextSet, visited );
+                }
+            } );
+        }, [ packageMap ] );
+
+        const togglePackage = useCallback( ( slug ) => {
+            setSelection( ( current ) => {
+                const next = new Set( current );
+                if ( next.has( slug ) ) {
+                    next.delete( slug );
+                    return Array.from( next );
+                }
+                resolveDependencies( slug, next, new Set() );
+                next.add( slug );
+                return Array.from( next );
+            } );
+        }, [ resolveDependencies ] );
+
+        if ( ! packages.length && ! MARKETPLACE_MANIFEST.errors.length ) {
+            return null;
+        }
+
+        const modal = previewPackage ? wp.element.createElement( Modal, {
+            title: previewPackage.title,
+            onRequestClose: () => setPreviewPackage( null ),
+        },
+        previewPackage.preview ? wp.element.createElement( 'img', { src: previewPackage.preview.src, alt: previewPackage.preview.caption || previewPackage.title, style: { maxWidth: '100%' } } ) : wp.element.createElement( 'p', null, __( 'No preview available for this package.', 'astra-builder' ) ),
+        previewPackage.description ? wp.element.createElement( 'p', null, previewPackage.description ) : null ) : null;
+
+        return wp.element.createElement( Card, { className: 'astra-builder__marketplace-card' },
+            wp.element.createElement( CardHeader, null, __( 'Marketplace', 'astra-builder' ) ),
+            wp.element.createElement( CardBody, null,
+                wp.element.createElement( 'p', { className: 'astra-builder__marketplace-description' }, __( 'Browse curated blocks and collections. Selecting an item automatically adds required dependencies.', 'astra-builder' ) ),
+                MARKETPLACE_MANIFEST.errors.map( ( error, index ) =>
+                    wp.element.createElement( Notice, { status: 'warning', isDismissible: false, key: `manifest-error-${ index }` }, error )
+                ),
+                packages.length ? packages.map( ( pkg ) => {
+                    const capabilityIssues = ( pkg.requires.capabilities || [] ).filter( ( cap ) => ! userCapabilities[ cap ] );
+                    const missingDependencies = ( pkg.requires.packages || [] ).filter( ( dep ) => ! packageMap.has( dep ) );
+                    const dependencySelections = ( pkg.requires.packages || [] ).filter( ( dep ) => selection.includes( dep ) );
+                    const isSelected = selection.includes( pkg.slug );
+                    const isBlocked = capabilityIssues.length > 0 || missingDependencies.length > 0;
+                    return wp.element.createElement( 'div', { className: 'astra-builder__marketplace-item', key: pkg.slug },
+                        wp.element.createElement( 'div', { className: 'astra-builder__marketplace-item__meta' },
+                            wp.element.createElement( 'strong', null, pkg.title ),
+                            pkg.vendor ? wp.element.createElement( 'span', null, pkg.vendor ) : null,
+                            pkg.version ? wp.element.createElement( 'span', { className: 'astra-builder__marketplace-item__version' }, sprintf( __( 'v%s', 'astra-builder' ), pkg.version ) ) : null
+                        ),
+                        pkg.description ? wp.element.createElement( 'p', { className: 'astra-builder__marketplace-item__description' }, pkg.description ) : null,
+                        pkg.tags && pkg.tags.length ? wp.element.createElement( 'p', { className: 'astra-builder__marketplace-item__tags' }, pkg.tags.map( ( tag ) => `#${ tag }` ).join( ' ' ) ) : null,
+                        wp.element.createElement( 'div', { className: 'astra-builder__marketplace-item__actions' },
+                            pkg.preview ? wp.element.createElement( Button, { isSecondary: true, isSmall: true, onClick: () => setPreviewPackage( pkg ) }, __( 'Preview', 'astra-builder' ) ) : null,
+                            wp.element.createElement( Button, {
+                                variant: isSelected ? 'secondary' : 'primary',
+                                onClick: () => togglePackage( pkg.slug ),
+                                disabled: isBlocked && ! isSelected,
+                            }, isSelected ? __( 'Selected', 'astra-builder' ) : __( 'Select', 'astra-builder' ) )
+                        ),
+                        capabilityIssues.length ? wp.element.createElement( Notice, { status: 'info', isDismissible: false }, sprintf( __( 'Requires capabilities: %s', 'astra-builder' ), capabilityIssues.join( ', ' ) ) ) : null,
+                        missingDependencies.length ? wp.element.createElement( Notice, { status: 'warning', isDismissible: false }, sprintf( __( 'Missing dependencies: %s', 'astra-builder' ), missingDependencies.join( ', ' ) ) ) : null,
+                        dependencySelections.length ? wp.element.createElement( 'p', { className: 'astra-builder__marketplace-item__dependencies' }, sprintf( __( 'Selected dependencies: %s', 'astra-builder' ), dependencySelections.join( ', ' ) ) ) : null
+                    );
+                } ) : wp.element.createElement( Notice, { status: 'info', isDismissible: false }, __( 'No packages are available yet.', 'astra-builder' ) ),
+                modal
+            )
+        );
+    };
+
     const ensureResponsiveAttribute = ( settings = {} ) => {
         const nextSettings = Object.assign( {}, settings );
         nextSettings.attributes = nextSettings.attributes || {};
@@ -2144,7 +2412,8 @@
             .map( createBlockFromBlueprint )
             .filter( Boolean );
 
-        return createBlock( blueprint.name, blueprint.attributes || {}, innerBlocks );
+        const blockInstance = createBlock( blueprint.name, blueprint.attributes || {}, innerBlocks );
+        return migrateSingleBlock( blockInstance );
     };
 
     const normalizeBlockIcon = ( blockIcon ) => {
@@ -2591,7 +2860,8 @@
     };
 
     const CanvasRenderer = () => {
-        const blocks = useSelect( ( select ) => select( 'core/block-editor' ).getBlocks(), [] );
+        const rawBlocks = useSelect( ( select ) => select( 'core/block-editor' ).getBlocks(), [] );
+        const blocks = useMemo( () => migrateBlockList( rawBlocks ), [ rawBlocks ] );
         const selectedClientIds = useSelect( ( select ) => {
             const blockEditor = select( 'core/block-editor' );
             if ( blockEditor.getSelectedBlockClientIds ) {
@@ -2818,6 +3088,7 @@
                 wp.element.createElement( SectionWorkflowPanel, null ),
                 wp.element.createElement( CollaborationPresencePanel, null ),
                 wp.element.createElement( DesignSystemPanel, null ),
+                wp.element.createElement( MarketplacePanel, null ),
                 wp.element.createElement( TemplateAssignmentsPanel, null ),
                 wp.element.createElement( AccessibilityAuditPanel, null ),
                 wp.element.createElement( PanelBody, {
@@ -2831,6 +3102,7 @@
             wp.element.createElement( SectionWorkflowPanel, null ),
             wp.element.createElement( CollaborationPresencePanel, null ),
             wp.element.createElement( DesignSystemPanel, null ),
+            wp.element.createElement( MarketplacePanel, null ),
             wp.element.createElement( TemplateAssignmentsPanel, null ),
             wp.element.createElement( AccessibilityAuditPanel, null ),
             wp.element.createElement( 'div', { className: 'astra-builder__palette' },
@@ -2859,6 +3131,41 @@
                 )
             )
         );
+
+    if ( wp.data && wp.data.subscribe ) {
+        const { select } = wp.data;
+        let wasSaving = false;
+        wp.data.subscribe( () => {
+            const editor = select( 'core/editor' );
+            if ( ! editor || ! editor.getCurrentPostType ) {
+                return;
+            }
+            const postType = editor.getCurrentPostType ? editor.getCurrentPostType() : null;
+            if ( postType !== 'astra_template' && postType !== 'astra_component' ) {
+                wasSaving = false;
+                return;
+            }
+            const isAutosaving = editor.isAutosavingPost ? editor.isAutosavingPost() : false;
+            const isSaving = editor.isSavingPost ? editor.isSavingPost() : false;
+            if ( isAutosaving ) {
+                return;
+            }
+            const payload = {
+                postId: editor.getCurrentPostId ? editor.getCurrentPostId() : null,
+                postType,
+                status: editor.getEditedPostAttribute ? editor.getEditedPostAttribute( 'status' ) : null,
+                content: editor.getEditedPostContent ? editor.getEditedPostContent() : '',
+                meta: editor.getEditedPostAttribute ? ( editor.getEditedPostAttribute( 'meta' ) || {} ) : {},
+            };
+            if ( isSaving && ! wasSaving && doAction ) {
+                doAction( ASTRA_BUILDER_EVENTS.BEFORE_SAVE, payload );
+            }
+            if ( ! isSaving && wasSaving && doAction ) {
+                doAction( ASTRA_BUILDER_EVENTS.AFTER_SAVE, payload );
+            }
+            wasSaving = isSaving;
+        } );
+    }
 
     registerPlugin( 'astra-builder', {
         render: BuilderPlugin,
