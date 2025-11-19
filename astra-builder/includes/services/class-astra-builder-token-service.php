@@ -285,7 +285,7 @@ class Astra_Builder_Token_Service {
             $snapshots = array();
         }
 
-        return update_option( self::SNAPSHOT_OPTION, $snapshots );
+        return update_option( self::SNAPSHOT_OPTION, $this->sanitize_snapshots( $snapshots ) );
     }
 
     /**
@@ -296,7 +296,96 @@ class Astra_Builder_Token_Service {
     public function get_snapshots() {
         $snapshots = get_option( self::SNAPSHOT_OPTION, array() );
 
-        return is_array( $snapshots ) ? $snapshots : array();
+        return $this->sanitize_snapshots( $snapshots );
+    }
+
+    /**
+     * Create and persist a snapshot payload.
+     *
+     * @param array|null $tokens Optional token override.
+     * @param array      $args   Metadata arguments.
+     *
+     * @return array
+     */
+    public function create_snapshot( $tokens = null, $args = array() ) {
+        $existing = $this->get_snapshots();
+        $user     = wp_get_current_user();
+        $snapshot = array(
+            'id'          => wp_generate_uuid4(),
+            'name'        => ! empty( $args['name'] ) ? sanitize_text_field( $args['name'] ) : sprintf( __( 'Snapshot %s', 'astra-builder' ), wp_date( 'M j, Y H:i' ) ),
+            'description' => ! empty( $args['description'] ) ? sanitize_textarea_field( $args['description'] ) : '',
+            'context'     => ! empty( $args['context'] ) ? sanitize_key( $args['context'] ) : 'manual',
+            'created'     => current_time( 'mysql', true ),
+            'version'     => $this->get_next_snapshot_version( $existing ),
+            'author'      => array(
+                'id'     => (int) $user->ID,
+                'name'   => $user->display_name,
+                'avatar' => get_avatar_url( $user->ID, array( 'size' => 64 ) ),
+            ),
+            'tokens'      => $tokens ? $this->deep_sanitize( $tokens ) : $this->get_tokens(),
+        );
+
+        array_unshift( $existing, $snapshot );
+        $this->set_snapshots( $existing );
+
+        return $snapshot;
+    }
+
+    /**
+     * Determine the next semantic version for snapshots.
+     *
+     * @param array $snapshots Existing snapshots.
+     *
+     * @return int
+     */
+    protected function get_next_snapshot_version( $snapshots ) {
+        $version = 1;
+
+        foreach ( $snapshots as $snapshot ) {
+            if ( isset( $snapshot['version'] ) ) {
+                $version = max( $version, (int) $snapshot['version'] + 1 );
+            }
+        }
+
+        return $version;
+    }
+
+    /**
+     * Sanitize stored snapshots.
+     *
+     * @param mixed $snapshots Snapshot payload.
+     *
+     * @return array
+     */
+    protected function sanitize_snapshots( $snapshots ) {
+        if ( ! is_array( $snapshots ) ) {
+            return array();
+        }
+
+        $sanitized = array();
+
+        foreach ( $snapshots as $snapshot ) {
+            if ( empty( $snapshot['id'] ) ) {
+                continue;
+            }
+
+            $sanitized[] = array(
+                'id'          => sanitize_text_field( $snapshot['id'] ),
+                'name'        => isset( $snapshot['name'] ) ? sanitize_text_field( $snapshot['name'] ) : '',
+                'description' => isset( $snapshot['description'] ) ? sanitize_textarea_field( $snapshot['description'] ) : '',
+                'context'     => isset( $snapshot['context'] ) ? sanitize_key( $snapshot['context'] ) : 'manual',
+                'created'     => isset( $snapshot['created'] ) ? sanitize_text_field( $snapshot['created'] ) : '',
+                'version'     => isset( $snapshot['version'] ) ? (int) $snapshot['version'] : 1,
+                'author'      => array(
+                    'id'     => isset( $snapshot['author']['id'] ) ? (int) $snapshot['author']['id'] : 0,
+                    'name'   => isset( $snapshot['author']['name'] ) ? sanitize_text_field( $snapshot['author']['name'] ) : '',
+                    'avatar' => isset( $snapshot['author']['avatar'] ) ? esc_url_raw( $snapshot['author']['avatar'] ) : '',
+                ),
+                'tokens'      => isset( $snapshot['tokens'] ) ? $this->deep_sanitize( $snapshot['tokens'] ) : array(),
+            );
+        }
+
+        return $sanitized;
     }
 
     /**

@@ -47,6 +47,8 @@ class Astra_Builder {
         require_once __DIR__ . '/rest/class-astra-builder-snapshots-controller.php';
         require_once __DIR__ . '/rest/class-astra-builder-settings-controller.php';
         require_once __DIR__ . '/rest/class-astra-builder-form-submissions-controller.php';
+        require_once __DIR__ . '/rest/class-astra-builder-diff-controller.php';
+        require_once __DIR__ . '/rest/class-astra-builder-collaboration-controller.php';
 
         $this->services['tokens'] = new Astra_Builder_Token_Service();
         $this->services['tokens']->register();
@@ -76,6 +78,8 @@ class Astra_Builder {
             new Astra_Builder_REST_Snapshots_Controller( $this->services['tokens'] ),
             new Astra_Builder_REST_Settings_Controller( $this->services['tokens'] ),
             new Astra_Builder_REST_Form_Submissions_Controller( $this->services['forms'] ),
+            new Astra_Builder_REST_Diff_Controller( $this->services['templates'] ),
+            new Astra_Builder_REST_Collaboration_Controller( $this->services['templates'] ),
         );
 
         foreach ( $controllers as $controller ) {
@@ -141,6 +145,8 @@ class Astra_Builder {
         wp_enqueue_script( 'astra-builder-canvas-renderer' );
         wp_enqueue_script( 'astra-builder-responsive-context' );
 
+        $current_user = wp_get_current_user();
+
         $editor_data = array(
             'conditions'    => $this->services['templates']->get_condition_options(),
             'metaKeys'      => $this->services['templates']->get_meta_keys(),
@@ -159,6 +165,17 @@ class Astra_Builder {
             'forms'         => $this->services['forms']->get_editor_config(),
             'tokens'        => array(
                 'initial' => $this->services['tokens']->get_tokens(),
+            ),
+            'user'          => array(
+                'id'     => (int) $current_user->ID,
+                'name'   => $current_user->display_name,
+                'avatar' => get_avatar_url( $current_user->ID, array( 'size' => 64 ) ),
+            ),
+            'collaboration' => array(
+                'role'             => $this->get_current_builder_role(),
+                'roles'            => $this->get_builder_roles(),
+                'sections'         => $this->services['templates']->get_section_catalog(),
+                'presenceInterval' => 15,
             ),
         );
 
@@ -236,5 +253,80 @@ class Astra_Builder {
         }
 
         printf( '<style id="astra-builder-token-styles">%s</style>', wp_strip_all_tags( $css ) );
+    }
+
+    /**
+     * Determine the collaboration role for the active user.
+     *
+     * @return string
+     */
+    protected function get_current_builder_role() {
+        if ( current_user_can( 'manage_options' ) ) {
+            return 'developer';
+        }
+
+        if ( current_user_can( 'publish_pages' ) ) {
+            return 'approver';
+        }
+
+        if ( current_user_can( 'edit_pages' ) ) {
+            return 'editor';
+        }
+
+        return 'designer';
+    }
+
+    /**
+     * Get metadata for supported collaboration roles.
+     *
+     * @return array
+     */
+    protected function get_builder_roles() {
+        return array(
+            'designer' => array(
+                'label'       => __( 'Designer', 'astra-builder' ),
+                'description' => __( 'Shapes layout, content, and design but cannot publish.', 'astra-builder' ),
+                'capabilities'=> array(
+                    'canEditLayout'  => true,
+                    'canEditContent' => true,
+                    'canEditStyles'  => true,
+                    'canPublish'     => false,
+                    'canApprove'     => false,
+                ),
+            ),
+            'editor'   => array(
+                'label'       => __( 'Editor', 'astra-builder' ),
+                'description' => __( 'Focuses on messaging and assets without layout or style control.', 'astra-builder' ),
+                'capabilities'=> array(
+                    'canEditLayout'  => false,
+                    'canEditContent' => true,
+                    'canEditStyles'  => false,
+                    'canPublish'     => false,
+                    'canApprove'     => false,
+                ),
+            ),
+            'developer' => array(
+                'label'       => __( 'Developer', 'astra-builder' ),
+                'description' => __( 'Owns implementation details, tokens, and publication rights.', 'astra-builder' ),
+                'capabilities'=> array(
+                    'canEditLayout'  => true,
+                    'canEditContent' => true,
+                    'canEditStyles'  => true,
+                    'canPublish'     => true,
+                    'canApprove'     => false,
+                ),
+            ),
+            'approver'  => array(
+                'label'       => __( 'Approver', 'astra-builder' ),
+                'description' => __( 'Reviews work, manages locks, and green-lights partial publishes.', 'astra-builder' ),
+                'capabilities'=> array(
+                    'canEditLayout'  => false,
+                    'canEditContent' => false,
+                    'canEditStyles'  => false,
+                    'canPublish'     => true,
+                    'canApprove'     => true,
+                ),
+            ),
+        );
     }
 }

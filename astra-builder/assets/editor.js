@@ -1,7 +1,7 @@
 ( function( wp ) {
     const { registerPlugin } = wp.plugins;
     const { __, sprintf } = wp.i18n;
-    const { Fragment, useCallback, useMemo, useState, useEffect } = wp.element;
+    const { Fragment, useCallback, useMemo, useState, useEffect, useContext } = wp.element;
     const {
         PanelBody,
         Card,
@@ -40,8 +40,274 @@
     const formConfig = pluginData.forms || {};
     const initialTokenState = pluginData.tokens && pluginData.tokens.initial ? pluginData.tokens.initial : null;
     const previewMetricTargets = pluginData.preview && pluginData.preview.metrics ? pluginData.preview.metrics : { lcpTarget: 2500, clsTarget: 0.1 };
+    const currentUser = pluginData.user || {};
+    const collaborationConfig = pluginData.collaboration || {};
+    const collaborationSections = collaborationConfig.sections || {};
 
     const defaultSpamSettings = formConfig.spam || {};
+
+    const CollaborationContext = wp.element.createContext( {
+        threads: [],
+        locks: {},
+        sectionState: {},
+        presence: [],
+        postLock: null,
+    } );
+
+    const useCollaboration = () => useContext( CollaborationContext );
+
+    const CollaborationProvider = ( { children } ) => {
+        const postId = useSelect( ( select ) => {
+            const editor = select( 'core/editor' );
+            return editor && editor.getCurrentPostId ? editor.getCurrentPostId() : null;
+        }, [] );
+        const [ threads, setThreads ] = useState( [] );
+        const [ locks, setLocks ] = useState( {} );
+        const [ sectionState, setSectionState ] = useState( {} );
+        const [ presence, setPresence ] = useState( [] );
+        const [ postLock, setPostLock ] = useState( null );
+        const [ activeThreadBlock, setActiveThreadBlock ] = useState( null );
+        const [ activeThreadId, setActiveThreadId ] = useState( null );
+        const [ focusedBlock, setFocusedBlock ] = useState( null );
+        const [ collabError, setCollabError ] = useState( null );
+        const [ isLoading, setIsLoading ] = useState( false );
+
+        const roles = collaborationConfig.roles || {};
+        const roleKey = collaborationConfig.role || 'designer';
+        const roleDefinition = roles[ roleKey ] || {};
+        const capabilities = roleDefinition.capabilities || {};
+
+        const fetchCollaboration = useCallback( () => {
+            if ( ! apiFetch || ! postId ) {
+                return;
+            }
+            setIsLoading( true );
+            apiFetch( { path: '/' + restNamespace + '/collaboration/' + postId } ).then( ( response ) => {
+                setIsLoading( false );
+                setCollabError( null );
+                setThreads( response && response.comments ? response.comments : [] );
+                setLocks( response && response.locks ? response.locks : {} );
+                setSectionState( response && response.sections ? response.sections : {} );
+                setPresence( response && response.presence ? response.presence : [] );
+                setPostLock( response && response.postLock ? response.postLock : null );
+            } ).catch( ( error ) => {
+                setIsLoading( false );
+                setCollabError( error && error.message ? error.message : __( 'Collaboration data unavailable.', 'astra-builder' ) );
+            } );
+        }, [ postId ] );
+
+        useEffect( () => {
+            fetchCollaboration();
+        }, [ fetchCollaboration ] );
+
+        const createThread = useCallback( ( blockId, message ) => {
+            if ( ! apiFetch || ! postId || ! blockId || ! message ) {
+                return Promise.reject();
+            }
+            return apiFetch( {
+                path: '/' + restNamespace + '/collaboration/' + postId + '/comments',
+                method: 'POST',
+                data: { blockId, message },
+            } ).then( ( response ) => {
+                if ( response && response.id ) {
+                    setThreads( ( prev ) => [ response, ...prev ] );
+                    setActiveThreadBlock( blockId );
+                    setActiveThreadId( response.id );
+                }
+                return response;
+            } );
+        }, [ postId ] );
+
+        const updateThreadInState = useCallback( ( updated ) => {
+            setThreads( ( prev ) => prev.map( ( thread ) => ( thread.id === updated.id ? updated : thread ) ) );
+        }, [] );
+
+        const replyToThread = useCallback( ( threadId, message ) => {
+            if ( ! apiFetch || ! postId || ! threadId || ! message ) {
+                return Promise.reject();
+            }
+            return apiFetch( {
+                path: '/' + restNamespace + '/collaboration/' + postId + '/comments/' + threadId,
+                method: 'POST',
+                data: { message },
+            } ).then( ( response ) => {
+                if ( response && response.id ) {
+                    updateThreadInState( response );
+                }
+                return response;
+            } );
+        }, [ postId, updateThreadInState ] );
+
+        const toggleThreadResolved = useCallback( ( threadId, resolved ) => {
+            if ( ! apiFetch || ! postId || ! threadId ) {
+                return Promise.reject();
+            }
+            return apiFetch( {
+                path: '/' + restNamespace + '/collaboration/' + postId + '/comments/' + threadId,
+                method: 'POST',
+                data: { resolved },
+            } ).then( ( response ) => {
+                if ( response && response.id ) {
+                    updateThreadInState( response );
+                }
+                return response;
+            } );
+        }, [ postId, updateThreadInState ] );
+
+        const requestSectionLock = useCallback( ( section, shouldLock ) => {
+            if ( ! apiFetch || ! postId || ! section ) {
+                return Promise.reject();
+            }
+            return apiFetch( {
+                path: '/' + restNamespace + '/collaboration/' + postId + '/locks',
+                method: 'POST',
+                data: { section, lock: shouldLock },
+            } ).then( ( response ) => {
+                setLocks( response || {} );
+                return response;
+            } ).catch( ( error ) => {
+                setCollabError( error && error.message ? error.message : __( 'Unable to update lock.', 'astra-builder' ) );
+            } );
+        }, [ postId ] );
+
+        const lockSection = useCallback( ( section ) => requestSectionLock( section, true ), [ requestSectionLock ] );
+        const unlockSection = useCallback( ( section ) => requestSectionLock( section, false ), [ requestSectionLock ] );
+
+        const updateSectionStatus = useCallback( ( section, status ) => {
+            if ( ! apiFetch || ! postId ) {
+                return Promise.reject();
+            }
+            return apiFetch( {
+                path: '/' + restNamespace + '/collaboration/' + postId + '/sections',
+                method: 'POST',
+                data: { section, status },
+            } ).then( ( response ) => {
+                setSectionState( response || {} );
+                return response;
+            } ).catch( ( error ) => {
+                setCollabError( error && error.message ? error.message : __( 'Unable to update section status.', 'astra-builder' ) );
+            } );
+        }, [ postId ] );
+
+        const registerFocusedBlock = useCallback( ( blockId ) => {
+            setFocusedBlock( blockId || null );
+        }, [] );
+
+        useEffect( () => {
+            if ( ! apiFetch || ! postId ) {
+                return () => {};
+            }
+            let isMounted = true;
+            const sendPresence = ( blockId ) => {
+                apiFetch( {
+                    path: '/' + restNamespace + '/collaboration/' + postId + '/presence',
+                    method: 'POST',
+                    data: { blockId: blockId || focusedBlock },
+                } ).then( ( roster ) => {
+                    if ( isMounted ) {
+                        setPresence( roster || [] );
+                    }
+                } ).catch( () => {} );
+            };
+            sendPresence( focusedBlock );
+            const interval = setInterval( () => sendPresence(), ( collaborationConfig.presenceInterval || 15 ) * 1000 );
+            return () => {
+                isMounted = false;
+                clearInterval( interval );
+            };
+        }, [ postId, focusedBlock ] );
+
+        const getThreadsForBlock = useCallback( ( blockId ) => threads.filter( ( thread ) => thread.blockId === blockId ), [ threads ] );
+        const getPresenceForBlock = useCallback( ( blockId ) => presence.filter( ( entry ) => entry.block === blockId ), [ presence ] );
+
+        const isSectionLocked = useCallback( ( sectionId ) => {
+            const lock = locks && locks[ sectionId ];
+            if ( ! lock || ! lock.user ) {
+                return false;
+            }
+            return lock.user !== currentUser.id;
+        }, [ locks, currentUser.id ] );
+
+        const getSectionLock = useCallback( ( sectionId ) => ( locks ? locks[ sectionId ] : null ), [ locks ] );
+
+        const canEditSection = useCallback( ( sectionId ) => {
+            if ( 'layout' === sectionId ) {
+                return !! capabilities.canEditLayout;
+            }
+            if ( 'styles' === sectionId ) {
+                return !! capabilities.canEditStyles;
+            }
+            if ( 'content' === sectionId ) {
+                return !! capabilities.canEditContent;
+            }
+            return false;
+        }, [ capabilities.canEditLayout, capabilities.canEditStyles, capabilities.canEditContent ] );
+
+        const openThreadForBlock = useCallback( ( blockId, threadId = null ) => {
+            setActiveThreadBlock( blockId );
+            setActiveThreadId( threadId );
+        }, [] );
+
+        const closeThreadPanel = useCallback( () => {
+            setActiveThreadBlock( null );
+            setActiveThreadId( null );
+        }, [] );
+
+        const activeThread = useMemo( () => {
+            if ( ! activeThreadBlock ) {
+                return null;
+            }
+            const scopedThreads = threads.filter( ( thread ) => thread.blockId === activeThreadBlock );
+            if ( ! scopedThreads.length ) {
+                return null;
+            }
+            if ( activeThreadId ) {
+                const found = scopedThreads.find( ( thread ) => thread.id === activeThreadId );
+                return found || scopedThreads[ 0 ];
+            }
+            return scopedThreads[ 0 ];
+        }, [ activeThreadBlock, activeThreadId, threads ] );
+
+        const contextValue = {
+            threads,
+            locks,
+            sectionState,
+            presence,
+            postLock,
+            roles,
+            roleKey,
+            activeThread,
+            activeThreadBlock,
+            openThreadForBlock,
+            closeThreadPanel,
+            setActiveThreadId,
+            getThreadsForBlock,
+            getPresenceForBlock,
+            createThread,
+            replyToThread,
+            toggleThreadResolved,
+            requestSectionLock,
+            lockSection,
+            unlockSection,
+            updateSectionStatus,
+            registerFocusedBlock,
+            isSectionLocked,
+            getSectionLock,
+            canEditSection,
+            canEditLayout: !! capabilities.canEditLayout,
+            canEditContent: !! capabilities.canEditContent,
+            canEditStyles: !! capabilities.canEditStyles,
+            canPublish: !! capabilities.canPublish,
+            canApprove: !! capabilities.canApprove,
+            sections: collaborationSections,
+            error: collabError,
+            isLoading,
+            refresh: fetchCollaboration,
+            currentUser,
+        };
+
+        return wp.element.createElement( CollaborationContext.Provider, { value: contextValue }, children );
+    };
 
     const sanitizeConditionList = ( list ) => Array.from( new Set( ( Array.isArray( list ) ? list : [] ).filter( Boolean ) ) );
 
@@ -1958,7 +2224,12 @@
         onDuplicate,
         onGroup,
         onRemove,
+        isReadOnly = false,
     } ) => {
+        const collaboration = useCollaboration();
+        const blockThreads = collaboration.getThreadsForBlock( block.clientId );
+        const blockPresence = collaboration.getPresenceForBlock( block.clientId );
+        const unresolvedCount = blockThreads.filter( ( thread ) => ! thread.resolved ).length;
         const blockType = getBlockType( block.name );
         const icon = blockType && blockType.icon ? normalizeBlockIcon( blockType.icon ) : 'layout';
         const title = ( blockType && blockType.title ) || block.name;
@@ -1966,18 +2237,40 @@
             'astra-builder__canvas-node',
             isSelected ? 'is-selected' : '',
             isHovered ? 'is-hovered' : '',
+            isReadOnly ? 'is-readonly' : '',
         ].filter( Boolean ).join( ' ' );
+
+        const handleFocus = () => {
+            collaboration.registerFocusedBlock( block.clientId );
+            onFocus( block.clientId );
+        };
+
+        const handleMouseEnter = () => {
+            collaboration.registerFocusedBlock( block.clientId );
+            onHover( block.clientId );
+        };
+
+        const handleCommentClick = ( event ) => {
+            event.stopPropagation();
+            collaboration.openThreadForBlock( block.clientId );
+        };
 
         return wp.element.createElement(
             'div',
             {
                 className,
                 style: { gridColumn: `${ geometry.column } / span ${ geometry.columnSpan }` },
-                draggable: true,
-                onDragStart: ( event ) => onDragStart( event, block ),
-                onMouseEnter: () => onHover( block.clientId ),
+                draggable: ! isReadOnly,
+                onDragStart: ( event ) => {
+                    if ( isReadOnly ) {
+                        event.preventDefault();
+                        return;
+                    }
+                    onDragStart( event, block );
+                },
+                onMouseEnter: handleMouseEnter,
                 onMouseLeave: onHoverEnd,
-                onClick: () => onFocus( block.clientId ),
+                onClick: handleFocus,
             },
             wp.element.createElement( 'div', { className: 'astra-builder__canvas-node__body' },
                 wp.element.createElement( Icon, { icon } ),
@@ -1985,8 +2278,24 @@
                     wp.element.createElement( 'strong', null, title ),
                     wp.element.createElement( 'code', null, block.clientId ),
                     block.innerBlocks && block.innerBlocks.length ? wp.element.createElement( 'small', null, __( 'Contains child blocks', 'astra-builder' ) ) : null
-                )
+                ),
+                wp.element.createElement( 'button', {
+                    type: 'button',
+                    className: 'astra-builder__comment-pin' + ( blockThreads.length ? ' has-comments' : '' ),
+                    onClick: handleCommentClick,
+                    title: blockThreads.length ? __( 'Open comment threads', 'astra-builder' ) : __( 'Start a comment thread', 'astra-builder' ),
+                }, blockThreads.length ? ( unresolvedCount || blockThreads.length ) : '+' )
             ),
+            blockPresence && blockPresence.length ? wp.element.createElement( 'div', { className: 'astra-builder__presence-group' },
+                blockPresence.slice( 0, 3 ).map( ( entry ) =>
+                    wp.element.createElement( 'span', {
+                        key: entry.user,
+                        className: 'astra-builder__presence-indicator',
+                        title: entry.name,
+                        style: entry.avatar ? { backgroundImage: `url(${ entry.avatar })` } : null,
+                    }, entry.name ? entry.name.charAt( 0 ) : '?' )
+                )
+            ) : null,
             wp.element.createElement( 'div', { className: 'astra-builder__canvas-node__handle', role: 'presentation' }, '⋮⋮' ),
             wp.element.createElement( CanvasBlockToolbar, {
                 isVisible: isSelected || isHovered,
@@ -2097,6 +2406,190 @@
         );
     };
 
+    const CollaborationPresencePanel = () => {
+        const { presence, refresh, error } = useCollaboration();
+
+        return wp.element.createElement( Card, { className: 'astra-builder__collaboration-panel' },
+            wp.element.createElement( CardHeader, null,
+                wp.element.createElement( 'div', { className: 'astra-builder__collaboration-panel__title' },
+                    wp.element.createElement( 'strong', null, __( 'Team presence', 'astra-builder' ) ),
+                    wp.element.createElement( Button, { isSmall: true, onClick: refresh }, __( 'Refresh', 'astra-builder' ) )
+                )
+            ),
+            wp.element.createElement( CardBody, null,
+                error ? wp.element.createElement( Notice, { status: 'warning', isDismissible: false }, error ) : null,
+                presence && presence.length ? presence.map( ( entry ) =>
+                    wp.element.createElement( 'div', { key: entry.user, className: 'astra-builder__presence-row' },
+                        wp.element.createElement( 'span', { className: 'astra-builder__presence-avatar', style: entry.avatar ? { backgroundImage: `url(${ entry.avatar })` } : null }, entry.name ? entry.name.charAt( 0 ) : '?' ),
+                        wp.element.createElement( 'div', { className: 'astra-builder__presence-meta' },
+                            wp.element.createElement( 'strong', null, entry.name || __( 'Anonymous', 'astra-builder' ) ),
+                            entry.block ? wp.element.createElement( 'small', null, sprintf( __( 'Viewing block %s', 'astra-builder' ), entry.block ) ) : null
+                        )
+                    )
+                ) : wp.element.createElement( 'p', { className: 'astra-builder__collaboration-panel__empty' }, __( 'You are the only one in the editor right now.', 'astra-builder' ) )
+            )
+        );
+    };
+
+    const SectionWorkflowPanel = () => {
+        const {
+            sections,
+            sectionState,
+            lockSection,
+            unlockSection,
+            isSectionLocked,
+            getSectionLock,
+            canEditSection,
+            canPublish,
+            canApprove,
+            updateSectionStatus,
+            currentUser,
+        } = useCollaboration();
+
+        if ( ! sections ) {
+            return null;
+        }
+
+        const statusLabels = {
+            draft: __( 'Draft', 'astra-builder' ),
+            review: __( 'In review', 'astra-builder' ),
+            approved: __( 'Approved', 'astra-builder' ),
+            published: __( 'Published', 'astra-builder' ),
+        };
+
+        const handleToggleLock = ( sectionId ) => {
+            const lock = getSectionLock( sectionId );
+            if ( lock && lock.user === currentUser.id ) {
+                unlockSection( sectionId );
+            } else {
+                lockSection( sectionId );
+            }
+        };
+
+        const renderActions = ( sectionId, state ) => {
+            const actions = [];
+
+            if ( canEditSection( sectionId ) && state.status === 'draft' ) {
+                actions.push( wp.element.createElement( Button, { key: 'review', isSmall: true, onClick: () => updateSectionStatus( sectionId, 'review' ) }, __( 'Request review', 'astra-builder' ) ) );
+            }
+
+            if ( canApprove && state.status === 'review' ) {
+                actions.push( wp.element.createElement( Button, { key: 'approve', isSmall: true, onClick: () => updateSectionStatus( sectionId, 'approved' ) }, __( 'Approve', 'astra-builder' ) ) );
+            }
+
+            if ( canPublish && state.status !== 'published' ) {
+                actions.push( wp.element.createElement( Button, { key: 'publish', isPrimary: true, isSmall: true, onClick: () => updateSectionStatus( sectionId, 'published' ) }, __( 'Publish section', 'astra-builder' ) ) );
+            }
+
+            return actions.length ? wp.element.createElement( 'div', { className: 'astra-builder__section-actions' }, actions ) : null;
+        };
+
+        return wp.element.createElement( Card, { className: 'astra-builder__section-panel' },
+            wp.element.createElement( CardHeader, null, __( 'Section workflow', 'astra-builder' ) ),
+            wp.element.createElement( CardBody, null,
+                Object.keys( sections ).map( ( sectionId ) => {
+                    const section = sections[ sectionId ];
+                    const state = sectionState && sectionState[ sectionId ] ? sectionState[ sectionId ] : { status: 'draft' };
+                    const lock = getSectionLock( sectionId );
+                    const lockedByOther = isSectionLocked( sectionId );
+                    const canLock = canEditSection( sectionId ) || canPublish || canApprove;
+                    return wp.element.createElement( 'div', { key: sectionId, className: 'astra-builder__section-row' },
+                        wp.element.createElement( 'div', { className: 'astra-builder__section-meta' },
+                            wp.element.createElement( 'strong', null, section.label ),
+                            wp.element.createElement( 'p', null, section.description ),
+                            wp.element.createElement( 'span', { className: 'astra-builder__section-status status-' + state.status }, statusLabels[ state.status ] || state.status ),
+                            lock ? wp.element.createElement( 'small', { className: 'astra-builder__section-lock' }, lockedByOther ? sprintf( __( 'Locked by %s', 'astra-builder' ), lock.name || __( 'teammate', 'astra-builder' ) ) : __( 'Locked by you', 'astra-builder' ) ) : null
+                        ),
+                        wp.element.createElement( 'div', { className: 'astra-builder__section-controls' },
+                            canLock ? wp.element.createElement( Button, {
+                                isSecondary: true,
+                                onClick: () => handleToggleLock( sectionId ),
+                                isDestructive: lock && lock.user === currentUser.id,
+                            }, lock ? __( 'Unlock', 'astra-builder' ) : __( 'Lock section', 'astra-builder' ) ) : null,
+                            renderActions( sectionId, state )
+                        )
+                    );
+                } )
+            )
+        );
+    };
+
+    const InlineCommentPanel = () => {
+        const {
+            activeThread,
+            activeThreadBlock,
+            closeThreadPanel,
+            setActiveThreadId,
+            getThreadsForBlock,
+            createThread,
+            replyToThread,
+            toggleThreadResolved,
+        } = useCollaboration();
+        const [ message, setMessage ] = useState( '' );
+        const threads = activeThreadBlock ? getThreadsForBlock( activeThreadBlock ) : [];
+        const block = useSelect( ( select ) => {
+            if ( ! activeThreadBlock ) {
+                return null;
+            }
+            const editor = select( 'core/block-editor' );
+            return editor && editor.getBlock ? editor.getBlock( activeThreadBlock ) : null;
+        }, [ activeThreadBlock ] );
+        const blockType = block ? getBlockType( block.name ) : null;
+        const blockLabel = block ? ( ( blockType && blockType.title ) || block.name ) : null;
+
+        if ( ! activeThreadBlock ) {
+            return null;
+        }
+
+        const handleSubmit = () => {
+            if ( ! message.trim() ) {
+                return;
+            }
+            const value = message.trim();
+            if ( activeThread ) {
+                replyToThread( activeThread.id, value );
+            } else {
+                createThread( activeThreadBlock, value );
+            }
+            setMessage( '' );
+        };
+
+        return wp.element.createElement( 'div', { className: 'astra-builder__comment-panel' },
+            wp.element.createElement( 'div', { className: 'astra-builder__comment-panel__header' },
+                wp.element.createElement( 'div', null,
+                    wp.element.createElement( 'strong', null, blockLabel || __( 'Block comments', 'astra-builder' ) ),
+                    wp.element.createElement( 'small', null, __( 'Discuss this block with your team.', 'astra-builder' ) )
+                ),
+                wp.element.createElement( Button, { onClick: closeThreadPanel, isSmall: true }, __( 'Close', 'astra-builder' ) )
+            ),
+            wp.element.createElement( 'div', { className: 'astra-builder__comment-thread-list' },
+                threads.length ? threads.map( ( thread ) => wp.element.createElement( 'div', { key: thread.id, className: 'astra-builder__comment-thread' + ( activeThread && activeThread.id === thread.id ? ' is-active' : '' ) },
+                    wp.element.createElement( 'div', { className: 'astra-builder__comment-thread__meta' },
+                        wp.element.createElement( Button, { isSmall: true, variant: 'link', onClick: () => setActiveThreadId( thread.id ) }, sprintf( __( 'Thread %s', 'astra-builder' ), thread.id.substring( 0, 4 ) ) ),
+                        thread.resolved ? wp.element.createElement( 'span', { className: 'astra-builder__comment-thread__resolved' }, __( 'Resolved', 'astra-builder' ) ) : null,
+                        wp.element.createElement( Button, { isSmall: true, onClick: () => toggleThreadResolved( thread.id, ! thread.resolved ) }, thread.resolved ? __( 'Reopen', 'astra-builder' ) : __( 'Resolve', 'astra-builder' ) )
+                    ),
+                    wp.element.createElement( 'div', { className: 'astra-builder__comment-thread__messages' },
+                        thread.comments && thread.comments.length ? thread.comments.map( ( item ) => wp.element.createElement( 'div', { key: item.id, className: 'astra-builder__comment-message' },
+                            wp.element.createElement( 'strong', null, item.author && item.author.name ? item.author.name : __( 'Teammate', 'astra-builder' ) ),
+                            wp.element.createElement( 'p', null, item.message ),
+                            item.created ? wp.element.createElement( 'small', null, item.created ) : null
+                        ) ) : wp.element.createElement( 'p', null, __( 'No comments yet.', 'astra-builder' ) )
+                    )
+                ) ) : wp.element.createElement( 'p', { className: 'astra-builder__comment-thread__empty' }, __( 'Start the conversation by leaving the first comment.', 'astra-builder' ) )
+            ),
+            wp.element.createElement( 'div', { className: 'astra-builder__comment-panel__composer' },
+                wp.element.createElement( TextareaControl, {
+                    label: __( 'Add a comment', 'astra-builder' ),
+                    value: message,
+                    onChange: setMessage,
+                    placeholder: __( 'Leave feedback for your teammates…', 'astra-builder' ),
+                } ),
+                wp.element.createElement( Button, { variant: 'primary', onClick: handleSubmit, disabled: ! message.trim() }, activeThread ? __( 'Reply', 'astra-builder' ) : __( 'Start thread', 'astra-builder' ) )
+            )
+        );
+    };
+
     const CanvasRenderer = () => {
         const blocks = useSelect( ( select ) => select( 'core/block-editor' ).getBlocks(), [] );
         const selectedClientIds = useSelect( ( select ) => {
@@ -2110,6 +2603,23 @@
         const { insertBlocks, moveBlockToPosition, selectBlock, duplicateBlocks, removeBlocks, wrapBlocks } = useDispatch( 'core/block-editor' );
         const [ activeDropIndex, setActiveDropIndex ] = useState( null );
         const [ hoveredBlockId, setHoveredBlockId ] = useState( null );
+        const collaboration = useCollaboration();
+
+        const layoutLock = collaboration.getSectionLock ? collaboration.getSectionLock( 'layout' ) : null;
+        const layoutLockedByOther = layoutLock && layoutLock.user && layoutLock.user !== collaboration.currentUser.id;
+        const postLockOwner = collaboration.postLock && collaboration.postLock.user && collaboration.postLock.user !== collaboration.currentUser.id ? collaboration.postLock : null;
+        const layoutDisabled = ! collaboration.canEditLayout || layoutLockedByOther || postLockOwner;
+        let lockBannerMessage = null;
+
+        if ( layoutDisabled ) {
+            if ( postLockOwner ) {
+                lockBannerMessage = sprintf( __( '%s is currently editing this template.', 'astra-builder' ), postLockOwner.name || __( 'Another editor', 'astra-builder' ) );
+            } else if ( layoutLockedByOther ) {
+                lockBannerMessage = sprintf( __( '%s locked layout editing.', 'astra-builder' ), layoutLock && layoutLock.name ? layoutLock.name : __( 'Another teammate', 'astra-builder' ) );
+            } else {
+                lockBannerMessage = __( 'Your current role cannot modify layout.', 'astra-builder' );
+            }
+        }
 
         const layoutMap = useMemo( () => createLayoutMap( blocks ), [ blocks ] );
         const topLevelNodes = useMemo( () => layoutMap.filter( ( node ) => node.depth === 0 ), [ layoutMap ] );
@@ -2124,6 +2634,9 @@
 
         const handleDrop = useCallback( ( event, index ) => {
             event.preventDefault();
+            if ( layoutDisabled ) {
+                return;
+            }
             const draggedExisting = event.dataTransfer.getData( DROP_TYPE.EXISTING_BLOCK );
             const draggedNew = event.dataTransfer.getData( DROP_TYPE.NEW_BLOCK );
 
@@ -2152,46 +2665,65 @@
             }
 
             setActiveDropIndex( null );
-        }, [ insertBlocks, moveBlockToPosition, selectBlock ] );
+        }, [ insertBlocks, moveBlockToPosition, selectBlock, layoutDisabled ] );
 
         const handleDragOver = useCallback( ( indexOrNull, event ) => {
             if ( event ) {
                 event.preventDefault();
             }
+            if ( layoutDisabled ) {
+                return;
+            }
             setActiveDropIndex( indexOrNull );
-        }, [] );
+        }, [ layoutDisabled ] );
 
         const handleExistingStartDrag = useCallback( ( event, block ) => {
+            if ( layoutDisabled ) {
+                event.preventDefault();
+                return;
+            }
             event.dataTransfer.setData( DROP_TYPE.EXISTING_BLOCK, JSON.stringify( { clientId: block.clientId } ) );
             event.dataTransfer.effectAllowed = 'move';
-        }, [] );
+        }, [ layoutDisabled ] );
 
         const handleDuplicate = useCallback( ( clientId ) => {
             const ids = clientId ? [ clientId ] : selectedClientIds;
             if ( ! ids.length ) {
                 return;
             }
+            if ( layoutDisabled ) {
+                return;
+            }
             duplicateBlocks( ids );
             selectBlock( ids[ ids.length - 1 ] );
-        }, [ duplicateBlocks, selectBlock, selectedClientIds ] );
+        }, [ duplicateBlocks, selectBlock, selectedClientIds, layoutDisabled ] );
 
         const handleGroup = useCallback( ( clientId ) => {
             const ids = selectedClientIds.length > 1 ? selectedClientIds : ( clientId ? [ clientId ] : [] );
             if ( ! ids.length ) {
                 return;
             }
+            if ( layoutDisabled ) {
+                return;
+            }
             wrapBlocks( ids, 'core/group' );
-        }, [ selectedClientIds, wrapBlocks ] );
+        }, [ selectedClientIds, wrapBlocks, layoutDisabled ] );
 
         const handleRemove = useCallback( ( clientId ) => {
             const ids = clientId ? [ clientId ] : selectedClientIds;
             if ( ids.length ) {
+                if ( layoutDisabled ) {
+                    return;
+                }
                 removeBlocks( ids );
             }
-        }, [ removeBlocks, selectedClientIds ] );
+        }, [ removeBlocks, selectedClientIds, layoutDisabled ] );
 
         const handleMoveSelection = useCallback( ( direction ) => {
             if ( ! selectedClientIds.length ) {
+                return;
+            }
+            if ( layoutDisabled ) {
                 return;
             }
             const targetId = selectedClientIds[ 0 ];
@@ -2206,9 +2738,9 @@
             }
             moveBlockToPosition( targetId, undefined, undefined, desiredIndex );
             selectBlock( targetId );
-        }, [ blocks, moveBlockToPosition, selectBlock, selectedClientIds ] );
+        }, [ blocks, moveBlockToPosition, selectBlock, selectedClientIds, layoutDisabled ] );
 
-        useKeyboardControls( {
+        useKeyboardControls( layoutDisabled ? { selectedClientIds: [] } : {
             selectedClientIds,
             onDuplicate: () => handleDuplicate(),
             onGroup: () => handleGroup(),
@@ -2245,6 +2777,7 @@
                             onDuplicate: handleDuplicate,
                             onGroup: handleGroup,
                             onRemove: handleRemove,
+                            isReadOnly: layoutDisabled,
                         } ) );
                     }
                 }
@@ -2263,9 +2796,11 @@
             hoveredBlockId,
             selectedClientIds,
             selectBlock,
+            layoutDisabled,
         ] );
 
-        return wp.element.createElement( 'div', { className: 'astra-builder__canvas-surface' },
+        return wp.element.createElement( 'div', { className: 'astra-builder__canvas-surface' + ( layoutDisabled ? ' is-locked' : '' ) },
+            lockBannerMessage ? wp.element.createElement( Notice, { className: 'astra-builder__canvas-lock', status: 'warning', isDismissible: false }, lockBannerMessage ) : null,
             wp.element.createElement( 'div', {
                 className: 'astra-builder__canvas-grid',
                 style: { gridTemplateColumns: `repeat(${ geometry.columns }, minmax(0, 1fr))`, gridAutoRows: `${ ROW_HEIGHT }px` },
@@ -2280,6 +2815,8 @@
 
         if ( isMobile ) {
             return wp.element.createElement( Fragment, null,
+                wp.element.createElement( SectionWorkflowPanel, null ),
+                wp.element.createElement( CollaborationPresencePanel, null ),
                 wp.element.createElement( DesignSystemPanel, null ),
                 wp.element.createElement( TemplateAssignmentsPanel, null ),
                 wp.element.createElement( AccessibilityAuditPanel, null ),
@@ -2291,6 +2828,8 @@
         }
 
         return wp.element.createElement( Fragment, null,
+            wp.element.createElement( SectionWorkflowPanel, null ),
+            wp.element.createElement( CollaborationPresencePanel, null ),
             wp.element.createElement( DesignSystemPanel, null ),
             wp.element.createElement( TemplateAssignmentsPanel, null ),
             wp.element.createElement( AccessibilityAuditPanel, null ),
@@ -2309,12 +2848,15 @@
     };
 
     const BuilderPlugin = () =>
-        wp.element.createElement( ResponsiveProvider, null,
-            wp.element.createElement( Fragment, null,
-                PluginSidebarMoreMenuItem ? wp.element.createElement( PluginSidebarMoreMenuItem, { target: 'astra-builder-sidebar' }, __( 'Astra Builder', 'astra-builder' ) ) : null,
-                PluginSidebar ? wp.element.createElement( PluginSidebar, { name: 'astra-builder-sidebar', title: __( 'Astra Builder', 'astra-builder' ) },
-                    wp.element.createElement( BuilderSidebar, null )
-                ) : wp.element.createElement( 'div', { className: 'astra-builder__inline' }, wp.element.createElement( BuilderSidebar, null ) )
+        wp.element.createElement( CollaborationProvider, null,
+            wp.element.createElement( ResponsiveProvider, null,
+                wp.element.createElement( Fragment, null,
+                    PluginSidebarMoreMenuItem ? wp.element.createElement( PluginSidebarMoreMenuItem, { target: 'astra-builder-sidebar' }, __( 'Astra Builder', 'astra-builder' ) ) : null,
+                    PluginSidebar ? wp.element.createElement( PluginSidebar, { name: 'astra-builder-sidebar', title: __( 'Astra Builder', 'astra-builder' ) },
+                        wp.element.createElement( BuilderSidebar, null )
+                    ) : wp.element.createElement( 'div', { className: 'astra-builder__inline' }, wp.element.createElement( BuilderSidebar, null ) ),
+                    wp.element.createElement( InlineCommentPanel, null )
+                )
             )
         );
 

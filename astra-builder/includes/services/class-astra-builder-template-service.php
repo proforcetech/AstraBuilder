@@ -17,6 +17,9 @@ class Astra_Builder_Template_Service {
     const PREVIEW_TRANSIENT_EXPIRY  = 6; // Hours.
     const META_ASSET_MANIFEST       = '_astra_builder_asset_manifest';
     const META_RESOURCE_HINTS       = '_astra_builder_resource_hints';
+    const META_COMMENTS             = '_astra_builder_collab_comments';
+    const META_SECTION_LOCKS        = '_astra_builder_collab_locks';
+    const META_SECTION_STATE        = '_astra_builder_collab_sections';
     const LCP_THRESHOLD             = 2500; // Milliseconds.
     const CLS_THRESHOLD             = 0.1;
 
@@ -203,6 +206,274 @@ class Astra_Builder_Template_Service {
 
         register_post_meta( self::TEMPLATE_POST_TYPE, self::META_RESOURCE_HINTS, $hint_args );
         register_post_meta( self::COMPONENT_POST_TYPE, self::META_RESOURCE_HINTS, $hint_args );
+
+        $comment_args = array(
+            'type'              => 'array',
+            'single'            => true,
+            'show_in_rest'      => false,
+            'auth_callback'     => function() {
+                return current_user_can( 'edit_theme_options' );
+            },
+            'sanitize_callback' => array( $this, 'sanitize_comment_threads' ),
+        );
+
+        register_post_meta( self::TEMPLATE_POST_TYPE, self::META_COMMENTS, $comment_args );
+        register_post_meta( self::COMPONENT_POST_TYPE, self::META_COMMENTS, $comment_args );
+
+        $lock_args = array(
+            'type'              => 'object',
+            'single'            => true,
+            'show_in_rest'      => false,
+            'auth_callback'     => function() {
+                return current_user_can( 'edit_theme_options' );
+            },
+            'sanitize_callback' => array( $this, 'sanitize_section_locks' ),
+        );
+
+        register_post_meta( self::TEMPLATE_POST_TYPE, self::META_SECTION_LOCKS, $lock_args );
+        register_post_meta( self::COMPONENT_POST_TYPE, self::META_SECTION_LOCKS, $lock_args );
+
+        $section_args = array(
+            'type'              => 'object',
+            'single'            => true,
+            'show_in_rest'      => false,
+            'auth_callback'     => function() {
+                return current_user_can( 'edit_theme_options' );
+            },
+            'sanitize_callback' => array( $this, 'sanitize_section_state' ),
+        );
+
+        register_post_meta( self::TEMPLATE_POST_TYPE, self::META_SECTION_STATE, $section_args );
+        register_post_meta( self::COMPONENT_POST_TYPE, self::META_SECTION_STATE, $section_args );
+    }
+
+    /**
+     * Sanitize inline comment threads.
+     *
+     * @param mixed $value Meta value.
+     *
+     * @return array
+     */
+    public function sanitize_comment_threads( $value ) {
+        if ( ! is_array( $value ) ) {
+            return array();
+        }
+
+        $sanitized = array();
+
+        foreach ( $value as $thread ) {
+            if ( empty( $thread['id'] ) || empty( $thread['blockId'] ) ) {
+                continue;
+            }
+
+            $comments = array();
+
+            if ( ! empty( $thread['comments'] ) && is_array( $thread['comments'] ) ) {
+                foreach ( $thread['comments'] as $comment ) {
+                    if ( empty( $comment['id'] ) || empty( $comment['message'] ) ) {
+                        continue;
+                    }
+
+                    $comments[] = array(
+                        'id'      => sanitize_text_field( $comment['id'] ),
+                        'message' => wp_kses_post( $comment['message'] ),
+                        'created' => isset( $comment['created'] ) ? sanitize_text_field( $comment['created'] ) : '',
+                        'author'  => array(
+                            'id'     => isset( $comment['author']['id'] ) ? (int) $comment['author']['id'] : 0,
+                            'name'   => isset( $comment['author']['name'] ) ? sanitize_text_field( $comment['author']['name'] ) : '',
+                            'avatar' => isset( $comment['author']['avatar'] ) ? esc_url_raw( $comment['author']['avatar'] ) : '',
+                        ),
+                    );
+                }
+            }
+
+            $sanitized[] = array(
+                'id'       => sanitize_text_field( $thread['id'] ),
+                'blockId'  => sanitize_text_field( $thread['blockId'] ),
+                'created'  => isset( $thread['created'] ) ? sanitize_text_field( $thread['created'] ) : '',
+                'resolved' => ! empty( $thread['resolved'] ),
+                'comments' => $comments,
+            );
+        }
+
+        return $sanitized;
+    }
+
+    /**
+     * Sanitize section locks.
+     *
+     * @param mixed $value Meta value.
+     *
+     * @return array
+     */
+    public function sanitize_section_locks( $value ) {
+        if ( ! is_array( $value ) ) {
+            return array();
+        }
+
+        $locks = array();
+
+        foreach ( $value as $section => $lock ) {
+            $locks[ sanitize_key( $section ) ] = array(
+                'user'      => isset( $lock['user'] ) ? (int) $lock['user'] : 0,
+                'name'      => isset( $lock['name'] ) ? sanitize_text_field( $lock['name'] ) : '',
+                'role'      => isset( $lock['role'] ) ? sanitize_text_field( $lock['role'] ) : '',
+                'timestamp' => isset( $lock['timestamp'] ) ? sanitize_text_field( $lock['timestamp'] ) : '',
+            );
+        }
+
+        return $locks;
+    }
+
+    /**
+     * Sanitize section workflow state.
+     *
+     * @param mixed $value Meta value.
+     *
+     * @return array
+     */
+    public function sanitize_section_state( $value ) {
+        if ( ! is_array( $value ) ) {
+            return $this->get_default_section_state();
+        }
+
+        $sections = $this->get_default_section_state();
+
+        foreach ( $sections as $key => $defaults ) {
+            if ( empty( $value[ $key ] ) || ! is_array( $value[ $key ] ) ) {
+                continue;
+            }
+
+            $incoming = $value[ $key ];
+            $sections[ $key ] = array(
+                'status'  => isset( $incoming['status'] ) ? sanitize_key( $incoming['status'] ) : $defaults['status'],
+                'updated' => isset( $incoming['updated'] ) ? sanitize_text_field( $incoming['updated'] ) : '',
+                'user'    => isset( $incoming['user'] ) ? (int) $incoming['user'] : 0,
+                'log'     => isset( $incoming['log'] ) && is_array( $incoming['log'] ) ? array_map(
+                    function( $entry ) {
+                        return array(
+                            'status' => isset( $entry['status'] ) ? sanitize_key( $entry['status'] ) : 'draft',
+                            'user'   => isset( $entry['user'] ) ? (int) $entry['user'] : 0,
+                            'time'   => isset( $entry['time'] ) ? sanitize_text_field( $entry['time'] ) : '',
+                        );
+                    },
+                    $incoming['log']
+                ) : array(),
+            );
+        }
+
+        return $sections;
+    }
+
+    /**
+     * Fetch saved comment threads.
+     *
+     * @param int $post_id Post identifier.
+     *
+     * @return array
+     */
+    public function get_comment_threads( $post_id ) {
+        $threads = get_post_meta( $post_id, self::META_COMMENTS, true );
+
+        return $this->sanitize_comment_threads( $threads );
+    }
+
+    /**
+     * Persist comment threads.
+     *
+     * @param int   $post_id Post identifier.
+     * @param array $threads Thread collection.
+     */
+    public function save_comment_threads( $post_id, $threads ) {
+        update_post_meta( $post_id, self::META_COMMENTS, $this->sanitize_comment_threads( $threads ) );
+    }
+
+    /**
+     * Fetch section locks for a post.
+     *
+     * @param int $post_id Post identifier.
+     *
+     * @return array
+     */
+    public function get_section_locks( $post_id ) {
+        $locks = get_post_meta( $post_id, self::META_SECTION_LOCKS, true );
+
+        return $this->sanitize_section_locks( $locks );
+    }
+
+    /**
+     * Save section locks.
+     *
+     * @param int   $post_id Post identifier.
+     * @param array $locks   Lock payload.
+     */
+    public function save_section_locks( $post_id, $locks ) {
+        update_post_meta( $post_id, self::META_SECTION_LOCKS, $this->sanitize_section_locks( $locks ) );
+    }
+
+    /**
+     * Retrieve section workflow state.
+     *
+     * @param int $post_id Post identifier.
+     *
+     * @return array
+     */
+    public function get_section_state( $post_id ) {
+        $state = get_post_meta( $post_id, self::META_SECTION_STATE, true );
+
+        return $this->sanitize_section_state( $state );
+    }
+
+    /**
+     * Save section workflow state.
+     *
+     * @param int   $post_id Post identifier.
+     * @param array $state   Section state payload.
+     */
+    public function save_section_state( $post_id, $state ) {
+        update_post_meta( $post_id, self::META_SECTION_STATE, $this->sanitize_section_state( $state ) );
+    }
+
+    /**
+     * Provide default section metadata.
+     *
+     * @return array
+     */
+    public function get_section_catalog() {
+        return array(
+            'layout'  => array(
+                'label'       => __( 'Layout', 'astra-builder' ),
+                'description' => __( 'Overall arrangement of sections and blocks.', 'astra-builder' ),
+            ),
+            'content' => array(
+                'label'       => __( 'Content', 'astra-builder' ),
+                'description' => __( 'Copywriting, media, and data-driven blocks.', 'astra-builder' ),
+            ),
+            'styles'  => array(
+                'label'       => __( 'Design system', 'astra-builder' ),
+                'description' => __( 'Color tokens, typography, and component-specific styling.', 'astra-builder' ),
+            ),
+        );
+    }
+
+    /**
+     * Return the default state for sections.
+     *
+     * @return array
+     */
+    public function get_default_section_state() {
+        $defaults = array();
+
+        foreach ( $this->get_section_catalog() as $key => $section ) {
+            $defaults[ $key ] = array(
+                'status'  => 'draft',
+                'updated' => '',
+                'user'    => 0,
+                'log'     => array(),
+            );
+        }
+
+        return $defaults;
     }
 
     /**
