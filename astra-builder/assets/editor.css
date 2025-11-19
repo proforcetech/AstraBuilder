@@ -41,6 +41,91 @@
     border-radius: 6px;
 }
 
+.astra-builder__accessibility-card {
+    margin-bottom: 24px;
+    border: 1px solid #dbe4ef;
+    border-radius: 6px;
+}
+
+.astra-builder__accessibility-description {
+    color: #475569;
+    font-size: 13px;
+    margin: 0 0 12px;
+}
+
+.astra-builder__audit-section {
+    border-top: 1px solid #e2e8f0;
+    padding-top: 12px;
+    margin-top: 12px;
+}
+
+.astra-builder__audit-section:first-of-type {
+    border-top: 0;
+    padding-top: 0;
+    margin-top: 0;
+}
+
+.astra-builder__audit-section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+
+.astra-builder__audit-section-header strong {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #1f2937;
+}
+
+.astra-builder__audit-status {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.astra-builder__audit-status.is-alert {
+    color: #b45309;
+}
+
+.astra-builder__audit-status.is-pass {
+    color: #15803d;
+}
+
+.astra-builder__audit-description {
+    margin: 6px 0 8px;
+    font-size: 12px;
+    color: #475569;
+}
+
+.astra-builder__audit-list {
+    margin: 0;
+    padding-left: 18px;
+    color: #1f2937;
+}
+
+.astra-builder__audit-issue {
+    margin-bottom: 10px;
+}
+
+.astra-builder__audit-issue strong {
+    display: block;
+    font-size: 13px;
+    color: #b91c1c;
+}
+
+.astra-builder__audit-issue span {
+    font-size: 12px;
+    color: #475569;
+}
+
+.astra-builder__audit-pass {
+    margin: 0;
+    font-size: 12px;
+    color: #15803d;
+}
+
 .astra-builder__template-settings .components-card__body {
     padding-top: 8px;
 }
@@ -163,6 +248,39 @@
 
 .astra-builder__preview-meta a:hover {
     text-decoration: underline;
+}
+
+.astra-builder__preview-metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 8px;
+    margin: 12px 0;
+}
+
+.astra-builder__preview-metric {
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 8px 12px;
+    background: #f8fafc;
+}
+
+.astra-builder__preview-metric.is-alert {
+    border-color: #f97316;
+    background: #fff7ed;
+}
+
+.astra-builder__preview-metric strong {
+    display: block;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #475569;
+}
+
+.astra-builder__preview-metric span {
+    display: block;
+    font-size: 13px;
+    color: #111827;
 }
 
 .astra-builder__palette-item {

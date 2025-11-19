@@ -39,6 +39,7 @@
     const bindingConfig = pluginData.binding || {};
     const formConfig = pluginData.forms || {};
     const initialTokenState = pluginData.tokens && pluginData.tokens.initial ? pluginData.tokens.initial : null;
+    const previewMetricTargets = pluginData.preview && pluginData.preview.metrics ? pluginData.preview.metrics : { lcpTarget: 2500, clsTarget: 0.1 };
 
     const defaultSpamSettings = formConfig.spam || {};
 
@@ -125,6 +126,106 @@
         }
 
         return next;
+    };
+
+    const stripHTML = ( value ) => ( value ? String( value ).replace( /<[^>]+>/g, '' ) : '' );
+
+    const parseHexColor = ( value ) => {
+        const hex = value.trim();
+        if ( ! /^#([0-9a-f]{3})$/i.test( hex ) ) {
+            return hex;
+        }
+        const shorthand = hex.replace( '#', '' );
+        return '#' + shorthand.split( '' ).map( ( char ) => char + char ).join( '' );
+    };
+
+    const parseColorValue = ( value ) => {
+        if ( ! value || 'string' !== typeof value ) {
+            return null;
+        }
+        const color = value.trim();
+        if ( /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test( color ) ) {
+            const normalized = color.length === 4 ? parseHexColor( color ) : color;
+            const hex = normalized.replace( '#', '' );
+            return [
+                parseInt( hex.slice( 0, 2 ), 16 ),
+                parseInt( hex.slice( 2, 4 ), 16 ),
+                parseInt( hex.slice( 4, 6 ), 16 ),
+            ];
+        }
+        const rgbMatch = color.match( /^rgba?\((\d+),\s*(\d+),\s*(\d+)/i );
+        if ( rgbMatch ) {
+            return [
+                parseInt( rgbMatch[ 1 ], 10 ),
+                parseInt( rgbMatch[ 2 ], 10 ),
+                parseInt( rgbMatch[ 3 ], 10 ),
+            ];
+        }
+        return null;
+    };
+
+    const relativeLuminance = ( rgb ) => {
+        if ( ! Array.isArray( rgb ) ) {
+            return null;
+        }
+        const channel = rgb.map( ( value ) => {
+            const channelValue = value / 255;
+            return channelValue <= 0.03928 ? channelValue / 12.92 : Math.pow( ( channelValue + 0.055 ) / 1.055, 2.4 );
+        } );
+        return 0.2126 * channel[ 0 ] + 0.7152 * channel[ 1 ] + 0.0722 * channel[ 2 ];
+    };
+
+    const getContrastRatio = ( rgbA, rgbB ) => {
+        const lumA = relativeLuminance( rgbA );
+        const lumB = relativeLuminance( rgbB );
+        if ( null === lumA || null === lumB ) {
+            return null;
+        }
+        const lighter = Math.max( lumA, lumB );
+        const darker = Math.min( lumA, lumB );
+        return ( lighter + 0.05 ) / ( darker + 0.05 );
+    };
+
+    const traverseBlocks = ( list, callback ) => {
+        if ( ! Array.isArray( list ) ) {
+            return;
+        }
+        list.forEach( ( block ) => {
+            if ( ! block ) {
+                return;
+            }
+            callback( block );
+            if ( Array.isArray( block.innerBlocks ) && block.innerBlocks.length ) {
+                traverseBlocks( block.innerBlocks, callback );
+            }
+        } );
+    };
+
+    const getReadableBlockLabel = ( block ) => {
+        if ( ! block || ! block.name ) {
+            return __( 'Block', 'astra-builder' );
+        }
+        const type = getBlockType ? getBlockType( block.name ) : null;
+        if ( type && type.title ) {
+            return type.title;
+        }
+        return block.name;
+    };
+
+    const extractReadableText = ( value ) => stripHTML( value || '' ).trim();
+
+    const formatMilliseconds = ( value ) => {
+        if ( 'number' === typeof value && value > 0 ) {
+            return Math.round( value ) + 'ms';
+        }
+        return __( 'n/a', 'astra-builder' );
+    };
+
+    const formatClsScore = ( value ) => {
+        if ( 'number' === typeof value ) {
+            return value.toFixed( 3 );
+        }
+        return __( 'n/a', 'astra-builder' );
     };
 
     const TEXT_TRANSFORM_OPTIONS = [
@@ -1422,10 +1523,154 @@
         );
     };
 
+    const INTERACTIVE_AUDIT_CHECKS = [
+        {
+            names: [ 'core/button' ],
+            label: __( 'Button', 'astra-builder' ),
+            getText: ( block ) => block && block.attributes ? ( block.attributes.text || block.attributes.content || '' ) : '',
+        },
+        {
+            names: [ 'core/navigation-link', 'core/navigation-submenu' ],
+            label: __( 'Navigation link', 'astra-builder' ),
+            getText: ( block ) => block && block.attributes ? ( block.attributes.label || block.attributes.title || '' ) : '',
+        },
+        {
+            names: [ 'core/search' ],
+            label: __( 'Search form', 'astra-builder' ),
+            getText: ( block ) => block && block.attributes ? ( block.attributes.label || block.attributes.placeholder || '' ) : '',
+        },
+    ];
+
+    const useAccessibilityAudits = () => {
+        const blocks = useSelect( ( select ) => {
+            const editor = select( 'core/block-editor' );
+            return editor && editor.getBlocks ? editor.getBlocks() : [];
+        }, [] );
+
+        return useMemo( () => {
+            const results = {
+                contrast: [],
+                headings: [],
+                keyboard: [],
+            };
+
+            const headingOrder = [];
+
+            traverseBlocks( blocks, ( block ) => {
+                if ( ! block ) {
+                    return;
+                }
+
+                const style = block.attributes && block.attributes.style ? block.attributes.style : null;
+                const textColor = getPathValue( style, [ 'color', 'text' ] );
+                const backgroundColor = getPathValue( style, [ 'color', 'background' ] );
+
+                if ( textColor && backgroundColor ) {
+                    const textRgb = parseColorValue( textColor );
+                    const backgroundRgb = parseColorValue( backgroundColor );
+                    const ratio = textRgb && backgroundRgb ? getContrastRatio( textRgb, backgroundRgb ) : null;
+                    if ( ratio && ratio < 4.5 ) {
+                        results.contrast.push( {
+                            message: sprintf( __( '%1$s contrast is %2$s:1.', 'astra-builder' ), getReadableBlockLabel( block ), ratio.toFixed( 2 ) ),
+                            action: __( 'Increase the color contrast to at least 4.5:1.', 'astra-builder' ),
+                        } );
+                    }
+                }
+
+                if ( 'core/heading' === block.name ) {
+                    const level = parseInt( block.attributes && block.attributes.level ? block.attributes.level : 2, 10 );
+                    const safeLevel = Number.isFinite( level ) ? level : 2;
+                    const label = extractReadableText( block.attributes && block.attributes.content ? block.attributes.content : '' ) || __( 'Heading', 'astra-builder' );
+                    headingOrder.push( { level: safeLevel, label } );
+                }
+
+                INTERACTIVE_AUDIT_CHECKS.forEach( ( check ) => {
+                    if ( check.names.indexOf( block.name ) === -1 ) {
+                        return;
+                    }
+                    const value = check.getText ? check.getText( block ) : '';
+                    const readable = extractReadableText( value );
+                    if ( ! readable ) {
+                        results.keyboard.push( {
+                            message: sprintf( __( '%s is missing a readable label.', 'astra-builder' ), check.label ),
+                            action: __( 'Add descriptive text or aria-labels so keyboard users know what each control does.', 'astra-builder' ),
+                        } );
+                    }
+                } );
+            } );
+
+            let previousLevel = 0;
+
+            headingOrder.forEach( ( heading ) => {
+                if ( previousLevel && heading.level > previousLevel + 1 ) {
+                    results.headings.push( {
+                        message: sprintf( __( 'Heading "%1$s" skips from H%2$d to H%3$d.', 'astra-builder' ), heading.label, previousLevel, heading.level ),
+                        action: __( 'Promote or insert the missing heading level to maintain logical order.', 'astra-builder' ),
+                    } );
+                }
+                previousLevel = heading.level;
+            } );
+
+            return results;
+        }, [ blocks ] );
+    };
+
+    const AuditSection = ( { title, description, issues, emptyMessage } ) => {
+        const hasIssues = issues.length > 0;
+        return wp.element.createElement( 'div', { className: 'astra-builder__audit-section' },
+            wp.element.createElement( 'div', { className: 'astra-builder__audit-section-header' },
+                wp.element.createElement( 'strong', null, title ),
+                wp.element.createElement( 'span', { className: 'astra-builder__audit-status ' + ( hasIssues ? 'is-alert' : 'is-pass' ) }, hasIssues ? sprintf( __( '%d issues', 'astra-builder' ), issues.length ) : __( 'All good', 'astra-builder' ) )
+            ),
+            description ? wp.element.createElement( 'p', { className: 'astra-builder__audit-description' }, description ) : null,
+            hasIssues ? wp.element.createElement( 'ul', { className: 'astra-builder__audit-list' },
+                issues.map( ( issue, index ) =>
+                    wp.element.createElement( 'li', { className: 'astra-builder__audit-issue', key: index },
+                        wp.element.createElement( 'strong', null, issue.message ),
+                        issue.action ? wp.element.createElement( 'span', null, issue.action ) : null
+                    )
+                )
+            ) : wp.element.createElement( 'p', { className: 'astra-builder__audit-pass' }, emptyMessage )
+        );
+    };
+
+    const AccessibilityAuditPanel = () => {
+        const audits = useAccessibilityAudits();
+        const totalIssues = audits.contrast.length + audits.headings.length + audits.keyboard.length;
+
+        return wp.element.createElement( Card, { className: 'astra-builder__accessibility-card' },
+            wp.element.createElement( CardHeader, null, __( 'Accessibility audits', 'astra-builder' ) ),
+            wp.element.createElement( CardBody, null,
+                wp.element.createElement( 'p', { className: 'astra-builder__accessibility-description' },
+                    totalIssues ? sprintf( __( '%d issues detected across the current layout.', 'astra-builder' ), totalIssues ) : __( 'No blocking accessibility issues detected.', 'astra-builder' )
+                ),
+                wp.element.createElement( AuditSection, {
+                    title: __( 'Contrast', 'astra-builder' ),
+                    description: __( 'Ensure text and surfaces meet WCAG contrast targets.', 'astra-builder' ),
+                    issues: audits.contrast,
+                    emptyMessage: __( 'Color pairs meet the minimum contrast ratio.', 'astra-builder' ),
+                } ),
+                wp.element.createElement( AuditSection, {
+                    title: __( 'Heading order', 'astra-builder' ),
+                    description: __( 'Headings should progress without skipping levels.', 'astra-builder' ),
+                    issues: audits.headings,
+                    emptyMessage: __( 'Heading levels are sequential.', 'astra-builder' ),
+                } ),
+                wp.element.createElement( AuditSection, {
+                    title: __( 'Keyboard navigation', 'astra-builder' ),
+                    description: __( 'Interactive controls need clear, focusable labels.', 'astra-builder' ),
+                    issues: audits.keyboard,
+                    emptyMessage: __( 'Interactive elements expose descriptive labels.', 'astra-builder' ),
+                } )
+            )
+        );
+    };
+
     const TemplatePreviewControls = () => {
         const [ isLoading, setIsLoading ] = useState( false );
         const [ error, setError ] = useState( null );
         const [ previewLink, setPreviewLink ] = useState( null );
+        const [ metrics, setMetrics ] = useState( null );
 
         const { postId, content, status, conditions, styles } = useSelect( ( select ) => {
             const editor = select( 'core/editor' );
@@ -1472,8 +1717,48 @@
             } );
         }, [ postId, content, conditions, status, styles, restNamespace ] );
 
+        useEffect( () => {
+            const handleMessage = ( event ) => {
+                if ( ! event || ! event.data || event.data.source !== 'astra-builder-preview-metrics' ) {
+                    return;
+                }
+
+                if ( event.origin && window.location && event.origin !== window.location.origin ) {
+                    return;
+                }
+
+                const payload = event.data.payload || {};
+
+                setMetrics( {
+                    lcp: 'number' === typeof payload.lcp ? payload.lcp : null,
+                    cls: 'number' === typeof payload.cls ? payload.cls : null,
+                    lcpTarget: payload.lcpTarget || previewMetricTargets.lcpTarget,
+                    clsTarget: payload.clsTarget || previewMetricTargets.clsTarget,
+                } );
+            };
+
+            window.addEventListener( 'message', handleMessage );
+
+            return () => window.removeEventListener( 'message', handleMessage );
+        }, [ previewMetricTargets.lcpTarget, previewMetricTargets.clsTarget ] );
+
+        const lcpExceeded = metrics && 'number' === typeof metrics.lcp && metrics.lcpTarget && metrics.lcp > metrics.lcpTarget;
+        const clsExceeded = metrics && 'number' === typeof metrics.cls && metrics.clsTarget && metrics.cls > metrics.clsTarget;
+        const hasMetricAlert = !! ( lcpExceeded || clsExceeded );
+
         return wp.element.createElement( 'div', { className: 'astra-builder__preview-controls' },
             wp.element.createElement( 'p', null, __( 'Generate a snapshot preview using the current template content and assignments.', 'astra-builder' ) ),
+            metrics ? wp.element.createElement( 'div', { className: 'astra-builder__preview-metrics' },
+                wp.element.createElement( 'div', { className: 'astra-builder__preview-metric' + ( lcpExceeded ? ' is-alert' : '' ) },
+                    wp.element.createElement( 'strong', null, __( 'LCP', 'astra-builder' ) ),
+                    wp.element.createElement( 'span', null, sprintf( __( '%1$s (target %2$s)', 'astra-builder' ), formatMilliseconds( metrics.lcp ), formatMilliseconds( metrics.lcpTarget ) ) )
+                ),
+                wp.element.createElement( 'div', { className: 'astra-builder__preview-metric' + ( clsExceeded ? ' is-alert' : '' ) },
+                    wp.element.createElement( 'strong', null, __( 'CLS', 'astra-builder' ) ),
+                    wp.element.createElement( 'span', null, sprintf( __( '%1$s (target %2$s)', 'astra-builder' ), formatClsScore( metrics.cls ), formatClsScore( metrics.clsTarget ) ) )
+                )
+            ) : null,
+            hasMetricAlert ? wp.element.createElement( Notice, { status: 'warning', isDismissible: false }, __( 'Preview performance needs attention. Consider simplifying above-the-fold content or deferring non-critical assets.', 'astra-builder' ) ) : null,
             error ? wp.element.createElement( Notice, { status: 'error', isDismissible: false }, error ) : null,
             previewLink ? wp.element.createElement( 'p', { className: 'astra-builder__preview-meta' },
                 __( 'Latest preview ready.', 'astra-builder' ),
@@ -1997,6 +2282,7 @@
             return wp.element.createElement( Fragment, null,
                 wp.element.createElement( DesignSystemPanel, null ),
                 wp.element.createElement( TemplateAssignmentsPanel, null ),
+                wp.element.createElement( AccessibilityAuditPanel, null ),
                 wp.element.createElement( PanelBody, {
                     title: __( 'Drag-and-drop layout', 'astra-builder' ),
                     initialOpen: true,
@@ -2007,6 +2293,7 @@
         return wp.element.createElement( Fragment, null,
             wp.element.createElement( DesignSystemPanel, null ),
             wp.element.createElement( TemplateAssignmentsPanel, null ),
+            wp.element.createElement( AccessibilityAuditPanel, null ),
             wp.element.createElement( 'div', { className: 'astra-builder__palette' },
                 wp.element.createElement( 'h2', null, __( 'Block palette', 'astra-builder' ) ),
                 wp.element.createElement( 'p', null, __( 'Drag components onto the canvas to compose your page.', 'astra-builder' ) ),
