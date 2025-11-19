@@ -154,7 +154,7 @@ class Astra_Builder_REST_Templates_Controller extends Astra_Builder_REST_Control
      *
      * @return WP_REST_Response
      */
-    public function get_items( WP_REST_Request $request ) {
+    public function get_items( $request ) {
         $posts = get_posts(
             array(
                 'post_type'      => array(
