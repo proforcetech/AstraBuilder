@@ -21,12 +21,21 @@ class Astra_Builder_REST_Settings_Controller extends Astra_Builder_REST_Controll
     protected $tokens;
 
     /**
+     * Insights service dependency.
+     *
+     * @var Astra_Builder_Insights_Service|null
+     */
+    protected $insights;
+
+    /**
      * Constructor.
      *
-     * @param Astra_Builder_Token_Service $tokens Token service.
+     * @param Astra_Builder_Token_Service        $tokens    Token service.
+     * @param Astra_Builder_Insights_Service|null $insights Insights service.
      */
-    public function __construct( Astra_Builder_Token_Service $tokens ) {
-        $this->tokens = $tokens;
+    public function __construct( Astra_Builder_Token_Service $tokens, ?Astra_Builder_Insights_Service $insights = null ) {
+        $this->tokens   = $tokens;
+        $this->insights = $insights;
     }
 
     /**
@@ -66,7 +75,13 @@ class Astra_Builder_REST_Settings_Controller extends Astra_Builder_REST_Controll
      * @return WP_REST_Response
      */
     public function get_item() {
-        return rest_ensure_response( $this->tokens->get_settings() );
+        $settings = $this->tokens->get_settings();
+
+        if ( $this->insights ) {
+            $settings['insights'] = $this->insights->get_settings();
+        }
+
+        return rest_ensure_response( $settings );
     }
 
     /**
@@ -78,8 +93,20 @@ class Astra_Builder_REST_Settings_Controller extends Astra_Builder_REST_Controll
      */
     public function update_item( WP_REST_Request $request ) {
         $settings = $request->get_json_params();
-        $this->tokens->set_settings( is_array( $settings ) ? $settings : array() );
+        $payload  = is_array( $settings ) ? $settings : array();
 
-        return rest_ensure_response( $this->tokens->get_settings() );
+        $token_settings = $payload;
+
+        if ( isset( $token_settings['insights'] ) ) {
+            unset( $token_settings['insights'] );
+        }
+
+        $this->tokens->set_settings( $token_settings );
+
+        if ( $this->insights && isset( $payload['insights'] ) ) {
+            $this->insights->update_settings( $payload['insights'] );
+        }
+
+        return $this->get_item();
     }
 }

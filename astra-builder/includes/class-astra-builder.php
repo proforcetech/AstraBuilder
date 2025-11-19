@@ -41,6 +41,10 @@ class Astra_Builder {
         require_once __DIR__ . '/services/class-astra-builder-token-service.php';
         require_once __DIR__ . '/services/class-astra-builder-form-service.php';
         require_once __DIR__ . '/services/class-astra-builder-data-binding-service.php';
+        require_once __DIR__ . '/services/class-astra-builder-media-service.php';
+        require_once __DIR__ . '/services/class-astra-builder-locale-service.php';
+        require_once __DIR__ . '/services/class-astra-builder-insights-service.php';
+        require_once __DIR__ . '/services/class-astra-builder-backup-service.php';
         require_once __DIR__ . '/rest/class-astra-builder-rest-controller.php';
         require_once __DIR__ . '/rest/class-astra-builder-templates-controller.php';
         require_once __DIR__ . '/rest/class-astra-builder-tokens-controller.php';
@@ -49,6 +53,10 @@ class Astra_Builder {
         require_once __DIR__ . '/rest/class-astra-builder-form-submissions-controller.php';
         require_once __DIR__ . '/rest/class-astra-builder-diff-controller.php';
         require_once __DIR__ . '/rest/class-astra-builder-collaboration-controller.php';
+        require_once __DIR__ . '/rest/class-astra-builder-backup-controller.php';
+
+        $this->services['locale'] = new Astra_Builder_Locale_Service();
+        $this->services['locale']->register();
 
         $this->services['tokens'] = new Astra_Builder_Token_Service();
         $this->services['tokens']->register();
@@ -61,6 +69,15 @@ class Astra_Builder {
 
         $this->services['binding'] = new Astra_Builder_Data_Binding_Service();
         $this->services['binding']->register();
+
+        $this->services['media'] = new Astra_Builder_Media_Service();
+        $this->services['media']->register();
+
+        $this->services['insights'] = new Astra_Builder_Insights_Service();
+        $this->services['insights']->register();
+
+        $this->services['backup'] = new Astra_Builder_Backup_Service( $this->services['templates'], $this->services['tokens'] );
+        $this->services['backup']->register();
 
         add_action( 'enqueue_block_editor_assets', array( $this, 'enqueue_block_editor_assets' ) );
         add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_frontend_assets' ) );
@@ -76,10 +93,11 @@ class Astra_Builder {
             new Astra_Builder_REST_Templates_Controller( $this->services['templates'] ),
             new Astra_Builder_REST_Tokens_Controller( $this->services['tokens'] ),
             new Astra_Builder_REST_Snapshots_Controller( $this->services['tokens'] ),
-            new Astra_Builder_REST_Settings_Controller( $this->services['tokens'] ),
+            new Astra_Builder_REST_Settings_Controller( $this->services['tokens'], $this->services['insights'] ),
             new Astra_Builder_REST_Form_Submissions_Controller( $this->services['forms'] ),
             new Astra_Builder_REST_Diff_Controller( $this->services['templates'] ),
             new Astra_Builder_REST_Collaboration_Controller( $this->services['templates'] ),
+            new Astra_Builder_REST_Backup_Controller( $this->services['backup'] ),
         );
 
         foreach ( $controllers as $controller ) {
@@ -141,6 +159,7 @@ class Astra_Builder {
             array( 'wp-edit-blocks' ),
             filemtime( $asset_path . 'assets/editor.css' )
         );
+        wp_style_add_data( 'astra-builder-editor', 'rtl', 'replace' );
 
         wp_enqueue_script( 'astra-builder-canvas-renderer' );
         wp_enqueue_script( 'astra-builder-responsive-context' );
@@ -177,9 +196,16 @@ class Astra_Builder {
                 'sections'         => $this->services['templates']->get_section_catalog(),
                 'presenceInterval' => 15,
             ),
+            'media'         => $this->services['media']->get_editor_config(),
+            'insights'      => $this->services['insights']->get_editor_config(),
+            'locale'        => $this->services['locale']->get_editor_config(),
+            'backup'        => array(
+                'endpoint' => rest_url( 'astra-builder/v1/backup' ),
+            ),
         );
 
         wp_localize_script( 'astra-builder-editor', 'AstraBuilderData', $editor_data );
+        wp_set_script_translations( 'astra-builder-editor', 'astra-builder', dirname( dirname( __FILE__ ) ) . '/languages' );
         wp_enqueue_script( 'astra-builder-editor' );
         wp_enqueue_style( 'astra-builder-editor' );
 
@@ -328,5 +354,31 @@ class Astra_Builder {
                 ),
             ),
         );
+    }
+
+    /**
+     * Execute shutdown routines when the plugin deactivates.
+     */
+    public function deactivate() {
+        if ( ! empty( $this->services['templates'] ) && method_exists( $this->services['templates'], 'handle_deactivation' ) ) {
+            $this->services['templates']->handle_deactivation();
+        }
+
+        if ( ! empty( $this->services['backup'] ) && method_exists( $this->services['backup'], 'maybe_store_automatic_backup' ) ) {
+            $this->services['backup']->maybe_store_automatic_backup();
+        }
+    }
+
+    /**
+     * Triggered via register_deactivation_hook.
+     */
+    public static function deactivate_plugin() {
+        $instance = self::instance();
+
+        if ( empty( $instance->services ) ) {
+            $instance->init();
+        }
+
+        $instance->deactivate();
     }
 }

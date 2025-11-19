@@ -20,6 +20,9 @@ class Astra_Builder_Template_Service {
     const META_COMMENTS             = '_astra_builder_collab_comments';
     const META_SECTION_LOCKS        = '_astra_builder_collab_locks';
     const META_SECTION_STATE        = '_astra_builder_collab_sections';
+    const META_PATTERN_SLUG         = '_astra_builder_pattern_slug';
+    const META_PATTERN_FALLBACK     = '_astra_builder_pattern_fallback_id';
+    const META_LANGUAGE             = '_astra_builder_language';
     const LCP_THRESHOLD             = 2500; // Milliseconds.
     const CLS_THRESHOLD             = 0.1;
 
@@ -29,6 +32,13 @@ class Astra_Builder_Template_Service {
      * @var Astra_Builder_Token_Service|null
      */
     protected $tokens;
+
+    /**
+     * Whether language scoping is active.
+     *
+     * @var bool
+     */
+    protected $language_scope_enabled = true;
 
     /**
      * Constructor.
@@ -49,6 +59,8 @@ class Astra_Builder_Template_Service {
         add_action( 'save_post_' . self::COMPONENT_POST_TYPE, array( $this, 'generate_template_artifacts' ), 10, 3 );
         add_filter( 'query_vars', array( $this, 'add_preview_query_var' ) );
         add_action( 'template_redirect', array( $this, 'maybe_render_preview' ) );
+        add_action( 'init', array( $this, 'register_pattern_exports' ), 20 );
+        add_action( 'pre_get_posts', array( $this, 'maybe_scope_language' ) );
     }
 
     /**
@@ -163,6 +175,42 @@ class Astra_Builder_Template_Service {
         register_post_meta( self::TEMPLATE_POST_TYPE, self::META_STYLE_OVERRIDES, $style_args );
         register_post_meta( self::COMPONENT_POST_TYPE, self::META_STYLE_OVERRIDES, $style_args );
 
+        $pattern_slug_args = array(
+            'type'         => 'string',
+            'single'       => true,
+            'show_in_rest' => true,
+            'auth_callback'=> function() {
+                return current_user_can( 'edit_theme_options' );
+            },
+        );
+
+        register_post_meta( self::TEMPLATE_POST_TYPE, self::META_PATTERN_SLUG, $pattern_slug_args );
+        register_post_meta( self::COMPONENT_POST_TYPE, self::META_PATTERN_SLUG, $pattern_slug_args );
+
+        $fallback_args = array(
+            'type'         => 'integer',
+            'single'       => true,
+            'show_in_rest' => false,
+            'auth_callback'=> function() {
+                return current_user_can( 'edit_theme_options' );
+            },
+        );
+
+        register_post_meta( self::TEMPLATE_POST_TYPE, self::META_PATTERN_FALLBACK, $fallback_args );
+        register_post_meta( self::COMPONENT_POST_TYPE, self::META_PATTERN_FALLBACK, $fallback_args );
+
+        $language_args = array(
+            'type'         => 'string',
+            'single'       => true,
+            'show_in_rest' => true,
+            'auth_callback'=> function() {
+                return current_user_can( 'edit_theme_options' );
+            },
+        );
+
+        register_post_meta( self::TEMPLATE_POST_TYPE, self::META_LANGUAGE, $language_args );
+        register_post_meta( self::COMPONENT_POST_TYPE, self::META_LANGUAGE, $language_args );
+
         $asset_args = array(
             'type'              => 'object',
             'single'            => true,
@@ -210,7 +258,19 @@ class Astra_Builder_Template_Service {
         $comment_args = array(
             'type'              => 'array',
             'single'            => true,
-            'show_in_rest'      => false,
+            'show_in_rest'      => array(
+                'schema' => array(
+                    'type'  => 'array',
+                    'items' => array(
+                        'type'       => 'object',
+                        'properties' => array(
+                            'author'  => array( 'type' => 'string' ),
+                            'message' => array( 'type' => 'string' ),
+                            'time'    => array( 'type' => 'string' ),
+                        ),
+                    ),
+                ),
+            ),
             'auth_callback'     => function() {
                 return current_user_can( 'edit_theme_options' );
             },
@@ -223,7 +283,7 @@ class Astra_Builder_Template_Service {
         $lock_args = array(
             'type'              => 'object',
             'single'            => true,
-            'show_in_rest'      => false,
+            'show_in_rest'      => true,
             'auth_callback'     => function() {
                 return current_user_can( 'edit_theme_options' );
             },
@@ -233,18 +293,177 @@ class Astra_Builder_Template_Service {
         register_post_meta( self::TEMPLATE_POST_TYPE, self::META_SECTION_LOCKS, $lock_args );
         register_post_meta( self::COMPONENT_POST_TYPE, self::META_SECTION_LOCKS, $lock_args );
 
-        $section_args = array(
+        $state_args = array(
             'type'              => 'object',
             'single'            => true,
-            'show_in_rest'      => false,
+            'show_in_rest'      => true,
             'auth_callback'     => function() {
                 return current_user_can( 'edit_theme_options' );
             },
             'sanitize_callback' => array( $this, 'sanitize_section_state' ),
         );
 
-        register_post_meta( self::TEMPLATE_POST_TYPE, self::META_SECTION_STATE, $section_args );
-        register_post_meta( self::COMPONENT_POST_TYPE, self::META_SECTION_STATE, $section_args );
+        register_post_meta( self::TEMPLATE_POST_TYPE, self::META_SECTION_STATE, $state_args );
+        register_post_meta( self::COMPONENT_POST_TYPE, self::META_SECTION_STATE, $state_args );
+    }
+
+    /**
+     * Register exported sections as block patterns.
+     */
+    public function register_pattern_exports() {
+        if ( ! function_exists( 'register_block_pattern' ) ) {
+            return;
+        }
+
+        register_block_pattern_category(
+            'astra-builder',
+            array(
+                'label' => __( 'Astra Builder', 'astra-builder' ),
+            )
+        );
+
+        $this->set_language_scope_enabled( false );
+
+        $sections = get_posts(
+            array(
+                'post_type'      => array( self::COMPONENT_POST_TYPE, self::TEMPLATE_POST_TYPE ),
+                'post_status'    => 'publish',
+                'posts_per_page' => -1,
+            )
+        );
+
+        foreach ( $sections as $section ) {
+            $slug = $this->ensure_pattern_slug( $section );
+
+            register_block_pattern(
+                'astra-builder/' . $slug,
+                array(
+                    'title'       => $section->post_title,
+                    'description' => __( 'Exported from Astra Builder.', 'astra-builder' ),
+                    'categories'  => array( 'astra-builder' ),
+                    'content'     => $section->post_content,
+                )
+            );
+        }
+
+        $this->set_language_scope_enabled( true );
+    }
+
+    /**
+     * Guarantee pattern slugs exist for a post.
+     *
+     * @param WP_Post $post Post object.
+     *
+     * @return string
+     */
+    protected function ensure_pattern_slug( $post ) {
+        $slug = get_post_meta( $post->ID, self::META_PATTERN_SLUG, true );
+
+        if ( empty( $slug ) ) {
+            $slug = sanitize_title( $post->post_name ? $post->post_name : $post->post_title );
+            update_post_meta( $post->ID, self::META_PATTERN_SLUG, $slug );
+        }
+
+        return $slug;
+    }
+
+    /**
+     * Synchronize fallback reusable block markup for graceful degradation.
+     *
+     * @param int     $post_id Post ID.
+     * @param WP_Post $post    Post object.
+     */
+    protected function synchronize_fallback_block( $post_id, $post ) {
+        if ( 'publish' !== $post->post_status ) {
+            return;
+        }
+
+        $slug    = $this->ensure_pattern_slug( $post );
+        $content = $post->post_content;
+        $data    = array(
+            'post_title'   => $post->post_title,
+            'post_name'    => $slug,
+            'post_content' => $content,
+            'post_status'  => 'publish',
+            'post_type'    => 'wp_block',
+        );
+
+        $fallback_id = (int) get_post_meta( $post_id, self::META_PATTERN_FALLBACK, true );
+
+        if ( $fallback_id && get_post( $fallback_id ) ) {
+            $data['ID'] = $fallback_id;
+            $result     = wp_update_post( $data, true );
+        } else {
+            $result = wp_insert_post( $data, true );
+        }
+
+        if ( ! is_wp_error( $result ) ) {
+            update_post_meta( $post_id, self::META_PATTERN_FALLBACK, (int) $result );
+        }
+    }
+
+    /**
+     * Return block pattern payload for REST exports.
+     *
+     * @param int $post_id Post ID.
+     *
+     * @return array
+     */
+    public function get_pattern_payload( $post_id ) {
+        $post = $this->get_post( $post_id );
+
+        if ( ! $post ) {
+            return array();
+        }
+
+        $slug = $this->ensure_pattern_slug( $post );
+
+        return array(
+            'name'        => 'astra-builder/' . $slug,
+            'title'       => $post->post_title,
+            'description' => __( 'Exported from Astra Builder.', 'astra-builder' ),
+            'categories'  => array( 'astra-builder' ),
+            'content'     => $post->post_content,
+        );
+    }
+
+    /**
+     * Convert Gutenberg markup into a canvas-friendly data structure.
+     *
+     * @param string $markup Raw block markup.
+     *
+     * @return array
+     */
+    public function convert_markup_to_layout( $markup ) {
+        $markup = (string) $markup;
+        $blocks = parse_blocks( $markup );
+
+        return array(
+            'layout' => $this->prepare_blocks_for_canvas( $blocks ),
+            'markup' => $markup,
+        );
+    }
+
+    /**
+     * Normalize block structures so the canvas can render them.
+     *
+     * @param array $blocks Parsed blocks.
+     *
+     * @return array
+     */
+    protected function prepare_blocks_for_canvas( $blocks ) {
+        $normalized = array();
+
+        foreach ( $blocks as $block ) {
+            $normalized[] = array(
+                'name'       => isset( $block['blockName'] ) ? $block['blockName'] : 'core/group',
+                'attributes' => isset( $block['attrs'] ) ? $block['attrs'] : array(),
+                'content'    => isset( $block['innerHTML'] ) ? wp_kses_post( $block['innerHTML'] ) : '',
+                'inner'      => ! empty( $block['innerBlocks'] ) ? $this->prepare_blocks_for_canvas( $block['innerBlocks'] ) : array(),
+            );
+        }
+
+        return $normalized;
     }
 
     /**
@@ -765,6 +984,9 @@ class Astra_Builder_Template_Service {
         update_post_meta( $post_id, self::META_CRITICAL_CSS, $compiled['css'] );
         update_post_meta( $post_id, self::META_ASSET_MANIFEST, $compiled['assets'] );
         update_post_meta( $post_id, self::META_RESOURCE_HINTS, $compiled['hints'] );
+        update_post_meta( $post_id, self::META_LANGUAGE, $this->get_active_language_code() );
+
+        $this->synchronize_fallback_block( $post_id, $post );
     }
 
     /**
@@ -827,7 +1049,7 @@ class Astra_Builder_Template_Service {
 
         $html = preg_replace( '/<img\b(?![^>]*\bdecoding=)/i', '<img decoding="async"', $html );
 
-        return $html;
+        return apply_filters( 'astra_builder_media_markup', $html );
     }
 
     /**
@@ -1375,7 +1597,104 @@ class Astra_Builder_Template_Service {
             'styles'     => self::META_STYLE_OVERRIDES,
             'assets'     => self::META_ASSET_MANIFEST,
             'hints'      => self::META_RESOURCE_HINTS,
+            'language'   => self::META_LANGUAGE,
+            'pattern'    => self::META_PATTERN_SLUG,
         );
+    }
+
+    /**
+     * Toggle language scoping.
+     *
+     * @param bool $enabled Whether the scope is active.
+     */
+    public function set_language_scope_enabled( $enabled ) {
+        $this->language_scope_enabled = (bool) $enabled;
+    }
+
+    /**
+     * Constrain template queries to the active language when WPML/Polylang is enabled.
+     *
+     * @param WP_Query $query Query object.
+     */
+    public function maybe_scope_language( $query ) { // phpcs:ignore VariableAnalysis.CodeAnalysis.VariableAnalysis.UnusedVariable
+        if ( ! $this->language_scope_enabled || ! $query instanceof WP_Query ) {
+            return;
+        }
+
+        $post_types = $query->get( 'post_type' );
+
+        if ( empty( $post_types ) ) {
+            $post_types = array( self::TEMPLATE_POST_TYPE, self::COMPONENT_POST_TYPE );
+        }
+
+        $types = is_array( $post_types ) ? $post_types : array( $post_types );
+
+        if ( empty( array_intersect( $types, array( self::TEMPLATE_POST_TYPE, self::COMPONENT_POST_TYPE ) ) ) ) {
+            return;
+        }
+
+        if ( $query->get( 'astra_builder_all_languages' ) ) {
+            return;
+        }
+
+        $language = $this->get_active_language_code();
+
+        if ( empty( $language ) ) {
+            return;
+        }
+
+        $meta_query   = $query->get( 'meta_query' );
+        $meta_query   = is_array( $meta_query ) ? $meta_query : array();
+        $meta_query[] = array(
+            'key'   => self::META_LANGUAGE,
+            'value' => $language,
+        );
+
+        $query->set( 'meta_query', $meta_query );
+    }
+
+    /**
+     * Determine the active language code.
+     *
+     * @return string
+     */
+    protected function get_active_language_code() {
+        if ( function_exists( 'pll_current_language' ) ) {
+            $lang = pll_current_language( 'slug' );
+
+            if ( $lang ) {
+                return $lang;
+            }
+        }
+
+        $wpml_lang = apply_filters( 'wpml_current_language', null );
+
+        if ( $wpml_lang ) {
+            return $wpml_lang;
+        }
+
+        return determine_locale();
+    }
+
+    /**
+     * Persist fallback resources ahead of plugin deactivation.
+     */
+    public function handle_deactivation() {
+        $this->set_language_scope_enabled( false );
+
+        $posts = get_posts(
+            array(
+                'post_type'      => array( self::TEMPLATE_POST_TYPE, self::COMPONENT_POST_TYPE ),
+                'posts_per_page' => -1,
+                'post_status'    => array( 'publish', 'draft' ),
+            )
+        );
+
+        foreach ( $posts as $post ) {
+            $this->synchronize_fallback_block( $post->ID, $post );
+        }
+
+        $this->set_language_scope_enabled( true );
     }
 
     /**
