@@ -67,7 +67,7 @@ class Astra_Builder_REST_Form_Submissions_Controller extends Astra_Builder_REST_
      *
      * @return WP_REST_Response
      */
-    public function get_items( WP_REST_Request $request ) {
+    public function get_items( $request ) {
         $per_page = (int) $request->get_param( 'per_page' );
         $items    = $this->forms->get_recent_submissions(
             array(
@@ -85,7 +85,7 @@ class Astra_Builder_REST_Form_Submissions_Controller extends Astra_Builder_REST_
      *
      * @return WP_REST_Response|WP_Error
      */
-    public function create_item( WP_REST_Request $request ) {
+    public function create_item( $request ) {
         $fields       = $this->forms->sanitize_fields( $request->get_param( 'fields' ) );
         $requirements = $request->get_param( 'requirements' );
         $payload      = array(
