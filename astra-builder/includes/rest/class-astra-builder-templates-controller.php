@@ -97,6 +97,36 @@ class Astra_Builder_REST_Templates_Controller extends Astra_Builder_REST_Control
                 ),
             )
         );
+
+        register_rest_route(
+            $this->namespace,
+            '/' . $this->rest_base . '/convert',
+            array(
+                array(
+                    'methods'             => WP_REST_Server::CREATABLE,
+                    'callback'            => array( $this, 'convert_markup' ),
+                    'permission_callback' => array( $this, 'can_manage_templates' ),
+                    'args'                => array(
+                        'markup' => array(
+                            'type'     => 'string',
+                            'required' => true,
+                        ),
+                    ),
+                ),
+            )
+        );
+
+        register_rest_route(
+            $this->namespace,
+            '/' . $this->rest_base . '/(?P<id>\d+)/pattern',
+            array(
+                array(
+                    'methods'             => WP_REST_Server::READABLE,
+                    'callback'            => array( $this, 'get_pattern' ),
+                    'permission_callback' => array( $this, 'can_manage_templates' ),
+                ),
+            )
+        );
     }
 
     /**
@@ -315,5 +345,35 @@ class Astra_Builder_REST_Templates_Controller extends Astra_Builder_REST_Control
         }
 
         return rest_ensure_response( $snapshot );
+    }
+
+    /**
+     * Convert markup for import workflows.
+     *
+     * @param WP_REST_Request $request Request object.
+     *
+     * @return WP_REST_Response
+     */
+    public function convert_markup( WP_REST_Request $request ) {
+        $markup = $request->get_param( 'markup' );
+
+        return rest_ensure_response( $this->templates->convert_markup_to_layout( (string) $markup ) );
+    }
+
+    /**
+     * Expose exported block pattern payload.
+     *
+     * @param WP_REST_Request $request Request.
+     *
+     * @return WP_REST_Response|WP_Error
+     */
+    public function get_pattern( WP_REST_Request $request ) {
+        $pattern = $this->templates->get_pattern_payload( $request['id'] );
+
+        if ( empty( $pattern ) ) {
+            return new WP_Error( 'astra_builder_not_found', __( 'Pattern not found.', 'astra-builder' ), array( 'status' => 404 ) );
+        }
+
+        return rest_ensure_response( $pattern );
     }
 }
