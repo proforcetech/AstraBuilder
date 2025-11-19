@@ -96,9 +96,11 @@ class Astra_Builder_REST_Tokens_Controller extends Astra_Builder_REST_Controller
     /**
      * Retrieve the currently saved tokens.
      *
+     * @param WP_REST_Request $request Request.
+     *
      * @return WP_REST_Response
      */
-    public function get_item() {
+    public function get_item( $request ) {
         return rest_ensure_response( $this->tokens->get_tokens() );
     }
 
@@ -109,7 +111,7 @@ class Astra_Builder_REST_Tokens_Controller extends Astra_Builder_REST_Controller
      *
      * @return WP_REST_Response|WP_Error
      */
-    public function update_item( WP_REST_Request $request ) {
+    public function update_item( $request ) {
         $body   = $request->get_json_params();
         $result = $this->tokens->update_tokens( is_array( $body ) ? $body : array() );
 
@@ -123,9 +125,11 @@ class Astra_Builder_REST_Tokens_Controller extends Astra_Builder_REST_Controller
     /**
      * Export design tokens as JSON.
      *
+     * @param WP_REST_Request $request Request.
+     *
      * @return WP_REST_Response
      */
-    public function export_item() {
+    public function export_item( $request ) {
         return rest_ensure_response( array( 'data' => $this->tokens->export_tokens() ) );
     }
 
@@ -136,7 +140,7 @@ class Astra_Builder_REST_Tokens_Controller extends Astra_Builder_REST_Controller
      *
      * @return WP_REST_Response|WP_Error
      */
-    public function import_item( WP_REST_Request $request ) {
+    public function import_item( $request ) {
         $body = $request->get_json_params();
         $json = isset( $body['data'] ) ? $body['data'] : '';
 
