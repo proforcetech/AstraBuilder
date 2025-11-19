@@ -72,9 +72,11 @@ class Astra_Builder_REST_Settings_Controller extends Astra_Builder_REST_Controll
     /**
      * Retrieve settings.
      *
+     * @param WP_REST_Request $request Request.
+     *
      * @return WP_REST_Response
      */
-    public function get_item() {
+    public function get_item( $request ) {
         $settings = $this->tokens->get_settings();
 
         if ( $this->insights ) {
@@ -91,7 +93,7 @@ class Astra_Builder_REST_Settings_Controller extends Astra_Builder_REST_Controll
      *
      * @return WP_REST_Response
      */
-    public function update_item( WP_REST_Request $request ) {
+    public function update_item( $request ) {
         $settings = $request->get_json_params();
         $payload  = is_array( $settings ) ? $settings : array();
 
@@ -107,6 +109,6 @@ class Astra_Builder_REST_Settings_Controller extends Astra_Builder_REST_Controll
             $this->insights->update_settings( $payload['insights'] );
         }
 
-        return $this->get_item();
+        return $this->get_item( $request );
     }
 }

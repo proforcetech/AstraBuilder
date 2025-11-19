@@ -275,7 +275,7 @@ class Astra_Builder_REST_Templates_Controller extends Astra_Builder_REST_Control
      *
      * @return array
      */
-    protected function prepare_item_for_database( WP_REST_Request $request ) {
+    protected function prepare_item_for_database( $request ) {
         $meta_input = (array) $request->get_param( 'meta' );
 
         if ( null !== $request->get_param( 'conditions' ) ) {
