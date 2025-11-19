@@ -86,9 +86,11 @@ class Astra_Builder_REST_Snapshots_Controller extends Astra_Builder_REST_Control
     /**
      * Get all snapshots.
      *
+     * @param WP_REST_Request $request Request.
+     *
      * @return WP_REST_Response
      */
-    public function get_items() {
+    public function get_items( $request ) {
         return rest_ensure_response( $this->tokens->get_snapshots() );
     }
 
@@ -99,7 +101,7 @@ class Astra_Builder_REST_Snapshots_Controller extends Astra_Builder_REST_Control
      *
      * @return WP_REST_Response
      */
-    public function create_item( WP_REST_Request $request ) { // phpcs:ignore VariableAnalysis.CodeAnalysis.VariableAnalysis.UnusedVariable
+    public function create_item( $request ) { // phpcs:ignore VariableAnalysis.CodeAnalysis.VariableAnalysis.UnusedVariable
         $snapshot = $this->tokens->create_snapshot(
             null,
             array(
@@ -119,7 +121,7 @@ class Astra_Builder_REST_Snapshots_Controller extends Astra_Builder_REST_Control
      *
      * @return WP_REST_Response
      */
-    public function delete_item( WP_REST_Request $request ) {
+    public function delete_item( $request ) {
         $id        = sanitize_text_field( $request['id'] );
         $snapshots = $this->tokens->get_snapshots();
         $filtered  = array_filter(
