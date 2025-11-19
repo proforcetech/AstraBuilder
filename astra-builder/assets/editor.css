@@ -596,3 +596,211 @@
         width: 100%;
     }
 }
+
+.astra-builder__comment-pin {
+    border: none;
+    background: #e0f2fe;
+    color: #0369a1;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    margin-left: auto;
+    cursor: pointer;
+    transition: background 0.2s ease;
+}
+
+.astra-builder__comment-pin.has-comments {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.astra-builder__presence-group {
+    display: flex;
+    gap: 4px;
+    margin: 4px 0 0;
+}
+
+.astra-builder__presence-indicator {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: #e2e8f0;
+    color: #0f172a;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 600;
+    background-size: cover;
+    background-position: center;
+}
+
+.astra-builder__collaboration-panel,
+.astra-builder__section-panel {
+    margin-bottom: 16px;
+}
+
+.astra-builder__collaboration-panel__title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.astra-builder__presence-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.astra-builder__presence-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: #e2e8f0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    color: #0f172a;
+    background-size: cover;
+    background-position: center;
+}
+
+.astra-builder__presence-meta strong {
+    display: block;
+    font-size: 13px;
+}
+
+.astra-builder__presence-meta small {
+    color: #64748b;
+}
+
+.astra-builder__section-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    border-bottom: 1px solid #e2e8f0;
+    padding: 12px 0;
+}
+
+.astra-builder__section-meta strong {
+    display: block;
+    margin-bottom: 4px;
+}
+
+.astra-builder__section-status {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    margin-top: 6px;
+}
+
+.astra-builder__section-status.status-draft {
+    background: #f1f5f9;
+    color: #475569;
+}
+
+.astra-builder__section-status.status-review {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.astra-builder__section-status.status-approved {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.astra-builder__section-status.status-published {
+    background: #e0e7ff;
+    color: #3730a3;
+}
+
+.astra-builder__section-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: flex-end;
+}
+
+.astra-builder__section-lock {
+    display: block;
+    font-size: 12px;
+    color: #64748b;
+    margin-top: 4px;
+}
+
+.astra-builder__comment-panel {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    width: 360px;
+    background: #ffffff;
+    box-shadow: 0 12px 24px rgba(15, 23, 42, 0.15);
+    border-radius: 12px;
+    z-index: 1000;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.astra-builder__comment-panel__header {
+    padding: 16px;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.astra-builder__comment-thread-list {
+    padding: 16px;
+    overflow-y: auto;
+    max-height: 300px;
+}
+
+.astra-builder__comment-thread {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+}
+
+.astra-builder__comment-thread.is-active {
+    border-color: #2563eb;
+}
+
+.astra-builder__comment-thread__meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.astra-builder__comment-message {
+    background: #f8fafc;
+    padding: 8px;
+    border-radius: 6px;
+    margin-bottom: 6px;
+}
+
+.astra-builder__comment-panel__composer {
+    padding: 16px;
+    border-top: 1px solid #e2e8f0;
+}
+
+.astra-builder__canvas-surface.is-locked {
+    position: relative;
+}
+
+.astra-builder__canvas-lock {
+    margin-bottom: 12px;
+}
+
+.astra-builder__canvas-node.is-readonly {
+    opacity: 0.9;
+}

@@ -46,6 +46,17 @@ class Astra_Builder_REST_Snapshots_Controller extends Astra_Builder_REST_Control
                     'methods'             => WP_REST_Server::CREATABLE,
                     'callback'            => array( $this, 'create_item' ),
                     'permission_callback' => array( $this, 'can_manage_snapshots' ),
+                    'args'                => array(
+                        'name'        => array(
+                            'type' => 'string',
+                        ),
+                        'description' => array(
+                            'type' => 'string',
+                        ),
+                        'context'     => array(
+                            'type' => 'string',
+                        ),
+                    ),
                 ),
             )
         );
@@ -89,17 +100,14 @@ class Astra_Builder_REST_Snapshots_Controller extends Astra_Builder_REST_Control
      * @return WP_REST_Response
      */
     public function create_item( WP_REST_Request $request ) { // phpcs:ignore VariableAnalysis.CodeAnalysis.VariableAnalysis.UnusedVariable
-        $snapshots = $this->tokens->get_snapshots();
-        $tokens    = $this->tokens->get_tokens();
-
-        $snapshot = array(
-            'id'      => wp_generate_uuid4(),
-            'created' => current_time( 'mysql', true ),
-            'tokens'  => $tokens,
+        $snapshot = $this->tokens->create_snapshot(
+            null,
+            array(
+                'name'        => $request->get_param( 'name' ),
+                'description' => $request->get_param( 'description' ),
+                'context'     => $request->get_param( 'context' ),
+            )
         );
-
-        array_unshift( $snapshots, $snapshot );
-        $this->tokens->set_snapshots( $snapshots );
 
         return rest_ensure_response( $snapshot );
     }
