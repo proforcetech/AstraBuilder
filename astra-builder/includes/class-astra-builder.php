@@ -112,6 +112,9 @@ class Astra_Builder {
         $plugin_file = dirname( __DIR__ ) . '/astra-builder.php';
         $asset_base  = plugin_dir_url( $plugin_file );
         $asset_path  = plugin_dir_path( $plugin_file );
+        $version_fn  = function( $relative ) use ( $asset_path ) {
+            return $this->get_versioned_asset_time( $asset_path . $relative );
+        };
 
         $dependencies = array(
             'wp-blocks',
@@ -130,7 +133,7 @@ class Astra_Builder {
             'astra-builder-canvas-renderer',
             $asset_base . 'assets/editor/canvas-renderer.js',
             array( 'wp-element', 'wp-data' ),
-            filemtime( $asset_path . 'assets/editor/canvas-renderer.js' ),
+            $version_fn( 'assets/editor/canvas-renderer.js' ),
             true
         );
 
@@ -138,7 +141,7 @@ class Astra_Builder {
             'astra-builder-responsive-context',
             $asset_base . 'assets/editor/responsive-context.js',
             array( 'wp-element', 'wp-data', 'wp-i18n' ),
-            filemtime( $asset_path . 'assets/editor/responsive-context.js' ),
+            $version_fn( 'assets/editor/responsive-context.js' ),
             true
         );
 
@@ -149,7 +152,7 @@ class Astra_Builder {
                 $dependencies,
                 array( 'astra-builder-canvas-renderer', 'astra-builder-responsive-context' )
             ),
-            filemtime( $asset_path . 'assets/editor.js' ),
+            $version_fn( 'assets/editor.js' ),
             true
         );
 
@@ -157,7 +160,7 @@ class Astra_Builder {
             'astra-builder-editor',
             $asset_base . 'assets/editor.css',
             array( 'wp-edit-blocks' ),
-            filemtime( $asset_path . 'assets/editor.css' )
+            $version_fn( 'assets/editor.css' )
         );
         wp_style_add_data( 'astra-builder-editor', 'rtl', 'replace' );
 
@@ -299,7 +302,7 @@ class Astra_Builder {
             'astra-builder-forms',
             $asset_base . 'assets/frontend.js',
             array(),
-            filemtime( $asset_path . 'assets/frontend.js' ),
+            $this->get_versioned_asset_time( $asset_path . 'assets/frontend.js' ),
             true
         );
 
@@ -407,6 +410,28 @@ class Astra_Builder {
                 ),
             ),
         );
+    }
+
+    /**
+     * Resolve a cache-busting version for an asset path.
+     *
+     * Falls back to the plugin version when the file is missing or unreadable,
+     * preventing filemtime warnings during build steps.
+     *
+     * @param string $absolute_path Absolute path to the asset.
+     *
+     * @return int|string
+     */
+    protected function get_versioned_asset_time( $absolute_path ) {
+        if ( $absolute_path && file_exists( $absolute_path ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+            $timestamp = @filemtime( $absolute_path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+
+            if ( $timestamp ) {
+                return $timestamp;
+            }
+        }
+
+        return defined( 'ASTRA_BUILDER_VERSION' ) ? ASTRA_BUILDER_VERSION : time();
     }
 
     /**
