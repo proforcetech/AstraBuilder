@@ -123,7 +123,7 @@ class Astra_Builder_REST_Collaboration_Controller extends Astra_Builder_REST_Con
      *
      * @return WP_REST_Response
      */
-    public function get_item( WP_REST_Request $request ) {
+    public function get_item( $request ) {
         $post_id = absint( $request['post_id'] );
 
         if ( ! $post_id ) {
