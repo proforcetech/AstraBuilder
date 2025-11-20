@@ -34,4 +34,5 @@ Because Astra Builder builds directly on Gutenberg's block editor APIs and custo
 
 - Read the [developer guide](docs/DEVELOPERS.md) to learn how to register presets, wrapper blocks, inspector controls, and block migrations via JavaScript or PHP filters.
 - Track completion tasks in [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md).
+- For actionable work items derived from the status doc, see [`docs/IMPLEMENTATION_TASKS.md`](docs/IMPLEMENTATION_TASKS.md).
 
